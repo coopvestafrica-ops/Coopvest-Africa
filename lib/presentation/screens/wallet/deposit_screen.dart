@@ -49,7 +49,19 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
         amount: amount,
         description: 'Wallet deposit via ${_selectedPaymentMethod.replaceAll('_', ' ')}',
       );
-      _showPendingDialog(result['message'] ?? 'Your deposit is pending verification.');
+      
+      // Safely extract the message from the result
+      String message = 'Your deposit is pending verification.';
+      if (result != null && result['message'] != null) {
+        final msgValue = result['message'];
+        if (msgValue is String) {
+          message = msgValue;
+        } else if (msgValue is Map) {
+          message = msgValue.toString();
+        }
+      }
+      
+      _showPendingDialog(message);
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Deposit failed: $e'), backgroundColor: CoopvestColors.error),

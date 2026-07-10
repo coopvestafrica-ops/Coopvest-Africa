@@ -118,22 +118,41 @@ class Transaction extends Equatable {
   }
 
   factory Transaction.fromJson(Map<String, dynamic> json) {
+    // Helper to safely extract string values, handling nested objects
+    String? safeString(dynamic value) {
+      if (value == null) return null;
+      if (value is String) return value;
+      if (value is Map) return value.toString();
+      return value.toString();
+    }
+    
     return Transaction(
-      id: json['id'] as String? ?? '',
-      walletId: json['wallet_id'] as String? ?? '',
-      type: json['type'] as String? ?? 'deposit',
-      category: json['category'] as String?,
-      amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
-      status: json['status'] as String? ?? 'completed',
-      description: json['description'] as String?,
-      referenceId: json['reference_id'] as String? ?? json['reference'] as String?,
-      createdAt: json['created_at'] != null
-          ? DateTime.parse(json['created_at'] as String)
-          : DateTime.now(),
-      updatedAt: json['updated_at'] != null
-          ? DateTime.parse(json['updated_at'] as String)
-          : DateTime.now(),
+      id: safeString(json['id']) ?? '',
+      walletId: safeString(json['wallet_id']) ?? safeString(json['profile_id']) ?? '',
+      type: safeString(json['type']) ?? 'deposit',
+      category: safeString(json['category']),
+      amount: _safeDouble(json['amount']),
+      status: safeString(json['status']) ?? 'completed',
+      description: safeString(json['description']),
+      referenceId: safeString(json['reference_id']) ?? safeString(json['reference']),
+      createdAt: _safeDateTime(json['created_at']),
+      updatedAt: _safeDateTime(json['updated_at']),
     );
+  }
+  
+  static double _safeDouble(dynamic value) {
+    if (value == null) return 0.0;
+    if (value is double) return value;
+    if (value is int) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? 0.0;
+    return 0.0;
+  }
+  
+  static DateTime _safeDateTime(dynamic value) {
+    if (value == null) return DateTime.now();
+    if (value is DateTime) return value;
+    if (value is String) return DateTime.tryParse(value) ?? DateTime.now();
+    return DateTime.now();
   }
 
   Map<String, dynamic> toJson() {

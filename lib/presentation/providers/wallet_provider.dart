@@ -326,12 +326,17 @@ class WalletNotifier extends StateNotifier<WalletState> {
       // The wallet will be updated after admin verification
       // Instead, add the pending transaction to the list
 
-      if (result['transaction'] != null) {
-        final pendingTxn = Transaction.fromJson(result['transaction'] as Map<String, dynamic>);
-        state = state.copyWith(
-          status: WalletStatus.loaded,
-          transactions: [pendingTxn, ...state.transactions],
-        );
+      if (result['transaction'] != null && result['transaction'] is Map<String, dynamic>) {
+        try {
+          final pendingTxn = Transaction.fromJson(result['transaction'] as Map<String, dynamic>);
+          state = state.copyWith(
+            status: WalletStatus.loaded,
+            transactions: [pendingTxn, ...state.transactions],
+          );
+        } catch (txnError) {
+          logger.w('Failed to parse pending transaction: $txnError');
+          state = state.copyWith(status: WalletStatus.loaded);
+        }
       } else {
         state = state.copyWith(status: WalletStatus.loaded);
       }
