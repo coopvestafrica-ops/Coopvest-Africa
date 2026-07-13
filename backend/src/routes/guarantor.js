@@ -518,4 +518,99 @@ router.post(
   }
 );
 
+
+// ---------------------------------------------------------------------------
+// POST /:loanId/confirm
+// QR-scan flow: guarantor confirms consent for a loan by loanId.
+// This endpoint UPSERTS the loan_guarantors row so it works whether or not
+// a pending record already exists for this guarantor.
+// Mounted outside requireFeatureFlag('loanModule') so it is always reachable.
+// ---------------------------------------------------------------------------
+router.post(
+  '/:loanId/confirm',
+  authenticate,
+  [param('loanId').notEmpty()],
+  validate,
+  async (req, res) => {
+    try {
+      const { loanId } = req.params;
+      const guarantorId = req.user.id;
+      const { guarantor_name, guarantor_phone } = req.body || {};
+
+      const now = new Date().toISOString();
+
+      // Check if a loan_guarantors row already exists for this user + loan
+      const { data: existing, error: findErr } = await supabase
+        .from('loan_guarantors')
+        .select('id, status')
+        .eq('loan_id', loanId)
+        .eq('guarantor_id', guarantorId)
+        .maybeSingle();
+
+      if (findErr) throw findErr;
+
+      if (!existing) {
+        // Insert a new consented row
+        const { error: insertErr } = await supabase
+          .from('loan_guarantors')
+          .insert({
+            loan_id: loanId,
+            guarantor_id: guarantorId,
+            status: 'consented',
+            consented_at: now,
+          });
+        if (insertErr) throw insertErr;
+      } else {
+        if (existing.status === 'consented') {
+          return res.status(400).json({ success: false, error: 'You have already confirmed this guarantee.' });
+        }
+        const { error: updateErr } = await supabase
+          .from('loan_guarantors')
+          .update({ status: 'consented', consented_at: now, updated_at: now })
+          .eq('id', existing.id);
+        if (updateErr) throw updateErr;
+      }
+
+      // Increment guarantors_found on loan_qrs if applicable
+      try {
+        const { data: qrRow } = await supabase
+          .from('loan_qrs')
+          .select('guarantors_found')
+          .eq('loan_id', loanId)
+          .maybeSingle();
+        if (qrRow) {
+          await supabase
+            .from('loan_qrs')
+            .update({ guarantors_found: (qrRow.guarantors_found || 0) + 1, updated_at: now })
+            .eq('loan_id', loanId);
+        }
+      } catch (_) {}
+
+      const { count: confirmedCount } = await supabase
+        .from('loan_guarantors')
+        .select('id', { count: 'exact', head: true })
+        .eq('loan_id', loanId)
+        .eq('status', 'consented');
+
+      await supabase.from('audit_logs').insert({
+        actor_id: guarantorId,
+        action: 'GUARANTOR_CONSENTED',
+        target_model: 'LoanGuarantor',
+        target_id: loanId,
+        metadata: { loanId, guarantorName: guarantor_name },
+      }).catch(() => {});
+
+      res.json({
+        success: true,
+        message: 'Guarantee confirmed successfully.',
+        guarantor_status: 'consented',
+        guarantors_now_confirmed: confirmedCount || 0,
+      });
+    } catch (err) {
+      logger.error('Error confirming guarantee (/:loanId/confirm):', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
 module.exports = router;
