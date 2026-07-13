@@ -166,30 +166,37 @@ router.post(
         payment_method: 'bank_transfer',
       });
 
-      // Create deposit request record for admin verification
-      const { data: depositRequest, error: depositErr } = await supabase
-        .from('deposit_requests')
-        .insert({
-          profile_id: req.user.id,
-          transaction_id: txn.id,
-          amount: Number(amount),
-          currency: 'NGN',
-          status: 'pending',
-          payment_reference: payment_reference || null,
-          payment_date: payment_date || null,
-          bank_name: bank_name || null,
-          sender_account_name: sender_account_name || null,
-          sender_account_number: sender_account_number || null,
-        })
-        .select('*')
-        .single();
-
-      if (depositErr) {
-        logger.error('Deposit request creation error:', depositErr);
-        throw depositErr;
+      // Create deposit request record for admin verification.
+      // Non-fatal: if the deposit_requests table does not yet exist (pending migration),
+      // the transaction is still recorded so the user is not blocked.
+      let depositRequest = null;
+      try {
+        const { data: dr, error: depositErr } = await supabase
+          .from('deposit_requests')
+          .insert({
+            profile_id: req.user.id,
+            transaction_id: txn.id,
+            amount: Number(amount),
+            currency: 'NGN',
+            status: 'pending',
+            payment_reference: payment_reference || null,
+            payment_date: payment_date || null,
+            bank_name: bank_name || null,
+            sender_account_name: sender_account_name || null,
+            sender_account_number: sender_account_number || null,
+          })
+          .select('*')
+          .single();
+        if (depositErr) {
+          logger.warn('deposit_requests insert failed (run migration 001_create_deposit_requests.sql):', depositErr.message);
+        } else {
+          depositRequest = dr;
+        }
+      } catch (drErr) {
+        logger.warn('deposit_requests table error (non-fatal):', drErr.message);
       }
 
-      logger.info(`Deposit request created for user ${req.user.id}: ₦${amount}`);
+      logger.info(`Deposit request submitted for user ${req.user.id}: ₦${amount}`);
 
       res.status(201).json({
         success: true,
