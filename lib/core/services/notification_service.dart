@@ -226,6 +226,7 @@ class NotificationService {
       case 'wallet_debited':
       case 'deposit':
       case 'withdrawal':
+      case 'deposit_rejected':
         return _channelWalletId;
       case 'otp':
       case 'otp_sent':
@@ -305,6 +306,10 @@ class NotificationService {
         case 'deposit':
         case 'withdrawal':
           navigatorKey.currentState?.pushNamed('/home');
+          break;
+        case 'deposit_rejected':
+          // Take user to notifications screen so they can see the reason
+          navigatorKey.currentState?.pushNamed('/notifications');
           break;
         case 'otp':
         case 'otp_sent':
