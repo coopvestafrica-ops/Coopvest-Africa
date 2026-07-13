@@ -93,10 +93,23 @@ class _GuarantorVerificationScreenState
         _isProcessing = false;
       });
       if (mounted) {
+        // Extract a clean message — avoid dumping raw DioException text to the user
+        String errorMsg = 'Unable to confirm guarantee. Please try again.';
+        final raw = e.toString();
+        if (raw.contains('SocketException') || raw.contains('connection')) {
+          errorMsg = 'No internet connection. Please check your network.';
+        } else if (raw.contains('401') || raw.contains('Unauthorized')) {
+          errorMsg = 'Session expired. Please log in again.';
+        } else if (raw.contains('404')) {
+          errorMsg = 'Guarantee record not found. Please scan the QR code again.';
+        } else if (raw.contains('timeout')) {
+          errorMsg = 'Request timed out. Please try again.';
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to confirm guarantee: $e'),
+            content: Text(errorMsg),
             backgroundColor: CoopvestColors.error,
+            duration: const Duration(seconds: 5),
           ),
         );
       }
