@@ -18,8 +18,63 @@ const supabase = require('../config/supabase');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
+const notifyService = require('../services/notifyService');
+const alertService = require('../services/alertService');
 
 const newRef = (prefix) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+/**
+ * Notify all admin/staff profiles about a new deposit request.
+ * Non-fatal: errors are logged but never bubble up to the caller.
+ */
+async function notifyAdminsNewDeposit({ amount, userId, depositId, hasProof }) {
+  try {
+    const amountFmt = Number(amount).toLocaleString('en-NG', { style: 'currency', currency: 'NGN' });
+    const proofNote = hasProof ? ' (proof attached)' : ' (no proof)';
+    const title = 'New Deposit Request';
+    const body = `A deposit of ${amountFmt} has been submitted${proofNote}. Verify in the admin dashboard.`;
+
+    // 1. Fetch all admin/staff profile IDs
+    const { data: admins } = await supabase
+      .from('profiles')
+      .select('id, email')
+      .in('role', ['admin', 'super_admin', 'superadmin', 'staff', 'operator']);
+
+    if (!admins || admins.length === 0) {
+      logger.info('notifyAdminsNewDeposit: no admin profiles found');
+      return;
+    }
+
+    const profileIds = admins.map(a => a.id);
+    const adminEmails = admins.map(a => a.email).filter(Boolean);
+
+    // 2. In-app notifications + FCM push for each admin
+    await notifyService.broadcast({
+      profileIds,
+      channels: ['in_app', 'push'],
+      title,
+      body,
+      type: 'deposit',
+    });
+
+    // 3. Email alert via alertService SMTP (non-blocking)
+    if (adminEmails.length > 0) {
+      await alertService.sendEmailAlert({
+        title: `💰 ${title}`,
+        message: `${body}<br><br>Deposit ID: <code>${depositId || 'N/A'}</code><br>User ID: <code>${userId}</code>`,
+        auditId: depositId || 'deposit',
+        userId,
+        riskLevel: 'INFO',
+        timestamp: new Date().toISOString(),
+        metadata: { amount, hasProof },
+      }).catch(err => logger.warn('Admin deposit email failed (non-fatal):', err.message));
+    }
+
+    logger.info(`Admin deposit notification sent to ${profileIds.length} admin(s)`);
+  } catch (err) {
+    logger.warn('notifyAdminsNewDeposit error (non-fatal):', err.message);
+  }
+}
 const newTransactionId = () => `TXN-${crypto.randomUUID()}`;
 
 async function ensureWallet(profileId) {
@@ -202,6 +257,14 @@ router.post(
       }
 
       logger.info(`Deposit request submitted for user ${req.user.id}: ₦${amount}`);
+
+      // Notify admins — fire-and-forget, never blocks the response
+      notifyAdminsNewDeposit({
+        amount,
+        userId: req.user.id,
+        depositId: depositRequest?.id,
+        hasProof: !!proof_url,
+      }).catch(() => {}); // already logs internally
 
       res.status(201).json({
         success: true,
