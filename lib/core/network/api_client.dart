@@ -248,16 +248,23 @@ class ApiClient {
       final statusCode = error.response!.statusCode;
       final data = error.response!.data;
 
+      // Safely coerce a dynamic value to String without throwing on Maps/Lists.
+      String? safeStr(dynamic v) {
+        if (v == null) return null;
+        if (v is String) return v;
+        return null; // Maps/Lists are not useful as error strings
+      }
+
       String? errorMessage;
       if (data is Map<String, dynamic>) {
         // Check for single error field first
-        errorMessage = data['error'] as String? ?? data['message'] as String? ?? data['msg'] as String?;
+        errorMessage = safeStr(data['error']) ?? safeStr(data['message']) ?? safeStr(data['msg']);
         // If no single error, check for validation errors array
         if (errorMessage == null && data['errors'] != null) {
           final errors = data['errors'] as List?;
           if (errors != null && errors.isNotEmpty) {
             final firstError = errors.first as Map<String, dynamic>?;
-            errorMessage = firstError?['msg'] as String? ?? firstError?['message'] as String?;
+            errorMessage = safeStr(firstError?['msg']) ?? safeStr(firstError?['message']);
           }
         }
       }
@@ -384,7 +391,7 @@ extension DioErrorExtension on DioException {
         return ApiException(message: 'Security certificate error.', statusCode: 495);
       case DioExceptionType.badResponse:
         return ApiException(
-          message: response?.data?['message'] as String? ?? 'Request failed',
+          message: (response?.data?['message'] is String ? response!.data['message'] as String : null) ?? 'Request failed',
           statusCode: response?.statusCode,
         );
       case DioExceptionType.cancel:

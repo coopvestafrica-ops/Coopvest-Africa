@@ -261,14 +261,21 @@ router.post(
     try {
       const { requestId } = req.params;
 
-      const { data: row, error: fetchErr } = await supabase
+      // Support two caller flows:
+      //  1. Guarantor dashboard — passes loan_guarantors.id (the PK)
+      //  2. QR-scan flow in the Flutter app — passes loans.id (the loan UUID)
+      // A single OR query handles both; we prefer an exact id match.
+      const { data: rows, error: fetchErr } = await supabase
         .from('loan_guarantors')
         .select('id, loan_id, qr_id, status')
-        .eq('id', requestId)
-        .eq('guarantor_id', req.user.id)
-        .maybeSingle();
+        .or(`id.eq.${requestId},loan_id.eq.${requestId}`)
+        .eq('guarantor_id', req.user.id);
 
       if (fetchErr) throw fetchErr;
+
+      // Prefer the row whose PK matches (dashboard flow); fall back to loan_id match (QR flow)
+      const row = (rows || []).find(r => r.id === requestId) || rows?.[0] || null;
+
       if (!row) return res.status(404).json({ success: false, error: 'Guarantor request not found' });
       if (row.status !== 'pending') {
         return res.status(400).json({ success: false, error: `Request is already ${mapStatus(row.status)}` });
@@ -276,10 +283,11 @@ router.post(
 
       const now = new Date().toISOString();
 
+      // Always update by the resolved PK (row.id), not the raw requestId param
       const { error: updateErr } = await supabase
         .from('loan_guarantors')
         .update({ status: 'consented', consented_at: now, updated_at: now })
-        .eq('id', requestId);
+        .eq('id', row.id);
 
       if (updateErr) throw updateErr;
 
@@ -303,7 +311,7 @@ router.post(
         actor_id: req.user.id,
         action: 'GUARANTOR_CONSENTED',
         target_model: 'LoanGuarantor',
-        target_id: requestId,
+        target_id: row.id,
         metadata: { loanId: row.loan_id },
       }).catch(() => {});
 
@@ -328,14 +336,17 @@ router.post(
       const { requestId } = req.params;
       const { reason } = req.body || {};
 
-      const { data: row, error: fetchErr } = await supabase
+      // Same dual-lookup as /accept: handle both guarantor-request PK and loan UUID
+      const { data: rows, error: fetchErr } = await supabase
         .from('loan_guarantors')
         .select('id, loan_id, status')
-        .eq('id', requestId)
-        .eq('guarantor_id', req.user.id)
-        .maybeSingle();
+        .or(`id.eq.${requestId},loan_id.eq.${requestId}`)
+        .eq('guarantor_id', req.user.id);
 
       if (fetchErr) throw fetchErr;
+
+      const row = (rows || []).find(r => r.id === requestId) || rows?.[0] || null;
+
       if (!row) return res.status(404).json({ success: false, error: 'Guarantor request not found' });
       if (row.status !== 'pending') {
         return res.status(400).json({ success: false, error: `Request is already ${mapStatus(row.status)}` });
@@ -343,10 +354,11 @@ router.post(
 
       const now = new Date().toISOString();
 
+      // Always update by the resolved PK (row.id), not the raw requestId param
       const { error: updateErr } = await supabase
         .from('loan_guarantors')
         .update({ status: 'rejected', updated_at: now })
-        .eq('id', requestId);
+        .eq('id', row.id);
 
       if (updateErr) throw updateErr;
 
@@ -354,7 +366,7 @@ router.post(
         actor_id: req.user.id,
         action: 'GUARANTOR_REJECTED',
         target_model: 'LoanGuarantor',
-        target_id: requestId,
+        target_id: row.id,
         metadata: { loanId: row.loan_id, reason: reason || null },
       }).catch(() => {});
 
