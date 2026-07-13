@@ -188,7 +188,7 @@ router.post(
             bank_name: bank_name || null,
             sender_account_name: sender_account_name || null,
             sender_account_number: sender_account_number || null,
-            proof_url: proof_url || null,
+            payment_proof_url: proof_url || null,
           })
           .select('*')
           .single();
