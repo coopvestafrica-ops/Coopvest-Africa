@@ -35,10 +35,11 @@ class LoanApiService {
   }
 
   /// Confirm guarantee (guarantor accepts)
-  /// Calls the /guarantor/requests/:requestId/accept endpoint.
-  /// The guarantorId in the request is the loan_guarantors record ID.
+  /// Calls the /guarantor/requests/:loanId/accept endpoint.
+  /// The loanId is used as the path param so the backend resolves the record
+  /// by loan_id + guarantor_id (from the JWT token).
   Future<GuarantorConfirmResponse> confirmGuarantee(String loanId, GuarantorConfirmRequest request) {
-    return _dio.post('/guarantor/requests/${request.guarantorId}/accept', data: request.toJson()).then((response) {
+    return _dio.post('/guarantor/requests/$loanId/accept', data: request.toJson()).then((response) {
       // Map the backend response to GuarantorConfirmResponse
       return GuarantorConfirmResponse(
         success: response.data['success'] as bool? ?? true,
@@ -50,10 +51,11 @@ class LoanApiService {
   }
 
   /// Decline guarantee (guarantor rejects)
-  /// Calls the /guarantor/requests/:requestId/decline endpoint.
-  /// The guarantorId in the request is the loan_guarantors record ID.
+  /// Calls the /guarantor/requests/:loanId/decline endpoint.
+  /// The loanId is used as the path param so the backend resolves the record
+  /// by loan_id + guarantor_id (from the JWT token).
   Future<GuarantorDeclineResponse> declineGuarantee(String loanId, GuarantorDeclineRequest request) {
-    return _dio.post('/guarantor/requests/${request.guarantorId}/decline', data: request.toJson()).then((response) {
+    return _dio.post('/guarantor/requests/$loanId/decline', data: request.toJson()).then((response) {
       // Map the backend response to GuarantorDeclineResponse
       return GuarantorDeclineResponse(
         success: response.data['success'] as bool? ?? true,
