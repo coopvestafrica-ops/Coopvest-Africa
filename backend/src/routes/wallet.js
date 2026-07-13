@@ -7,6 +7,9 @@
  */
 
 const crypto = require('crypto');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const express = require('express');
 const { body } = require('express-validator');
 const router = express.Router();
@@ -150,11 +153,12 @@ router.post(
     body('bank_name').optional().isString(),
     body('sender_account_name').optional().isString(),
     body('sender_account_number').optional().isString(),
+    body('proof_url').optional().isURL(),
   ],
   validate,
   async (req, res) => {
     try {
-      const { amount, description, payment_reference, payment_date, bank_name, sender_account_name, sender_account_number } = req.body;
+      const { amount, description, payment_reference, payment_date, bank_name, sender_account_name, sender_account_number, proof_url } = req.body;
 
       // Create a PENDING transaction (no wallet credit yet)
       const txn = await recordTransaction(req.user.id, {
@@ -184,6 +188,7 @@ router.post(
             bank_name: bank_name || null,
             sender_account_name: sender_account_name || null,
             sender_account_number: sender_account_number || null,
+            proof_url: proof_url || null,
           })
           .select('*')
           .single();
@@ -459,6 +464,42 @@ router.get('/payment-settings', authenticate, async (req, res) => {
   } catch (err) {
     logger.error('wallet payment-settings error:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
+/**
+ * POST /api/v1/wallet/upload-proof — Upload a bank-transfer proof screenshot.
+ * Returns { success: true, url: '<public-url>' }.
+ * The URL is then passed as `proof_url` to POST /wallet/contribute.
+ */
+router.post('/upload-proof', authenticate, upload.single('proof'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No file uploaded.' });
+    }
+    const ext = (req.file.originalname.split('.').pop() || 'jpg').toLowerCase();
+    if (!['jpg', 'jpeg', 'png', 'pdf'].includes(ext)) {
+      return res.status(400).json({ success: false, message: 'Only JPG, PNG, or PDF allowed.' });
+    }
+    const storagePath = `proofs/${req.user.id}/${uuidv4()}.${ext}`;
+    const { error: uploadError } = await supabase.storage
+      .from('deposit-proofs')
+      .upload(storagePath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false,
+      });
+    if (uploadError) throw uploadError;
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('deposit-proofs')
+      .getPublicUrl(storagePath);
+
+    logger.info(`Deposit proof uploaded for user ${req.user.id}: ${storagePath}`);
+    res.json({ success: true, url: publicUrl });
+  } catch (err) {
+    logger.error('upload-proof error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Upload failed.' });
   }
 });
 
