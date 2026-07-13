@@ -1,9 +1,13 @@
+import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../config/theme_config.dart';
 import '../../../config/theme_extension.dart';
 import '../../../core/utils/utils.dart';
+import '../../../core/network/api_client.dart';
 import '../../../presentation/providers/wallet_provider.dart';
 import '../../../presentation/providers/payment_settings_provider.dart';
 import '../../../presentation/widgets/common/buttons.dart';
@@ -25,6 +29,10 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
   final _formKey = GlobalKey<FormState>();
   String _selectedPaymentMethod = 'bank_transfer';
   bool _isProcessing = false;
+  File? _proofFile;
+  bool _isUploadingProof = false;
+  String? _proofUrl;
+  final ImagePicker _imagePicker = ImagePicker();
 
   @override
   void initState() {
@@ -40,14 +48,191 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
     {'value': 'ussd', 'label': 'USSD', 'icon': Icons.phone_android},
   ];
 
+  Future<void> _pickProofImage(ImageSource source) async {
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
+      if (picked != null) {
+        setState(() {
+          _proofFile = File(picked.path);
+          _proofUrl = null; // reset previously uploaded URL
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not pick image: $e'), backgroundColor: CoopvestColors.error),
+        );
+      }
+    }
+  }
+
+  void _showProofSourceSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Upload Transfer Proof', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: context.textPrimary)),
+              const SizedBox(height: 20),
+              Row(children: [
+                Expanded(
+                  child: _proofSourceTile(ctx, Icons.camera_alt, 'Camera', () => _pickProofImage(ImageSource.camera)),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _proofSourceTile(ctx, Icons.photo_library, 'Gallery', () => _pickProofImage(ImageSource.gallery)),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _proofSourceTile(BuildContext ctx, IconData icon, String label, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: () { Navigator.pop(ctx); onTap(); },
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: CoopvestColors.primary.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(children: [
+          Icon(icon, size: 36, color: CoopvestColors.primary),
+          const SizedBox(height: 8),
+          Text(label, style: TextStyle(fontWeight: FontWeight.w600, color: context.textPrimary)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildProofPicker(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Text('Proof of Payment', style: TextStyle(fontWeight: FontWeight.bold, color: context.textPrimary)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: CoopvestColors.success.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text('Recommended', style: TextStyle(fontSize: 10, color: CoopvestColors.success, fontWeight: FontWeight.w600)),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Text(
+            'Attach a screenshot of your bank transfer receipt to speed up verification.',
+            style: TextStyle(fontSize: 12, color: context.textSecondary),
+          ),
+          const SizedBox(height: 12),
+          GestureDetector(
+            onTap: _showProofSourceSheet,
+            child: Container(
+              width: double.infinity,
+              padding: _proofFile != null ? EdgeInsets.zero : const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: _proofFile != null ? CoopvestColors.success : context.dividerColor,
+                  width: _proofFile != null ? 2 : 1,
+                ),
+                borderRadius: BorderRadius.circular(12),
+                color: _proofFile != null
+                    ? CoopvestColors.success.withOpacity(0.04)
+                    : context.cardBackground,
+              ),
+              child: _proofFile != null
+                  ? Column(
+                      children: [
+                        ClipRRect(
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+                          child: Image.file(
+                            _proofFile!,
+                            height: 160,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.check_circle, color: CoopvestColors.success, size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _proofFile!.path.split('/').last,
+                                  style: TextStyle(fontSize: 12, color: context.textSecondary),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              GestureDetector(
+                                onTap: () => setState(() { _proofFile = null; _proofUrl = null; }),
+                                child: Icon(Icons.close, size: 18, color: context.textSecondary),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+                  : Column(children: [
+                      Icon(Icons.upload_file, size: 40, color: context.textSecondary.withOpacity(0.5)),
+                      const SizedBox(height: 8),
+                      Text('Tap to attach receipt', style: TextStyle(color: context.textSecondary)),
+                      const SizedBox(height: 4),
+                      Text('JPG or PNG, max 10 MB', style: TextStyle(fontSize: 11, color: context.textSecondary.withOpacity(0.6))),
+                    ]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _processDeposit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isProcessing = true);
     try {
       final amount = double.parse(_amountController.text.replaceAll(',', ''));
+
+      // Upload proof image if user attached one
+      String? proofUrl = _proofUrl;
+      if (_proofFile != null && proofUrl == null) {
+        setState(() { _isUploadingProof = true; });
+        try {
+          final apiClient = ref.read(apiClientProvider);
+          final formData = FormData.fromMap({
+            'proof': await MultipartFile.fromFile(_proofFile!.path, filename: _proofFile!.path.split('/').last),
+          });
+          final uploadResp = await apiClient.dio.post('/wallet/upload-proof', data: formData);
+          if (uploadResp.data['success'] == true) {
+            proofUrl = uploadResp.data['url'] as String?;
+          }
+        } catch (uploadErr) {
+          // Non-fatal: continue deposit without proof
+        } finally {
+          setState(() { _isUploadingProof = false; });
+        }
+      }
+
       final result = await ref.read(walletProvider.notifier).makeContribution(
         amount: amount,
         description: 'Wallet deposit via ${_selectedPaymentMethod.replaceAll('_', ' ')}',
+        proofUrl: proofUrl,
       );
       
       // Safely extract the message from the result
@@ -389,6 +574,10 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
                 if (_selectedPaymentMethod == 'bank_transfer')
                   _buildBankTransferDetails(context),
 
+                // Proof of payment (bank transfer only)
+                if (_selectedPaymentMethod == 'bank_transfer')
+                  _buildProofPicker(context),
+
                 const SizedBox(height: 24),
 
                 AppCard(
@@ -412,7 +601,13 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
                 const SizedBox(height: 32),
 
                 _isProcessing
-                    ? const Center(child: CircularProgressIndicator(color: CoopvestColors.primary))
+                    ? Column(children: [
+                        const Center(child: CircularProgressIndicator(color: CoopvestColors.primary)),
+                        if (_isUploadingProof) ...[
+                          const SizedBox(height: 8),
+                          Text('Uploading proof...', style: TextStyle(fontSize: 12, color: context.textSecondary)),
+                        ],
+                      ])
                     : PrimaryButton(
                         label: 'Deposit ₦${_amountController.text.isEmpty ? '0' : _amountController.text}',
                         onPressed: _processDeposit,
