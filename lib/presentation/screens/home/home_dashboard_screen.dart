@@ -20,6 +20,7 @@ import '../../../presentation/providers/insights_provider.dart';
 import '../../../presentation/providers/notifications_provider.dart';
 import '../../../core/services/realtime_notification_service.dart';
 import '../../../data/models/notification_models.dart';
+import '../../../presentation/providers/deposit_history_provider.dart';
 import '../../../presentation/providers/announcement_provider.dart';
 import '../../../presentation/providers/guarantor_provider.dart';
 import '../../../presentation/providers/document_provider.dart';
@@ -104,6 +105,11 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
       try {
         final notification = AppNotification.fromJson(row);
         ref.read(notificationsProvider.notifier).addNotification(notification);
+        // Refresh deposit history for wallet events so status screen stays current
+        final type = row['type'] as String? ?? '';
+        if (type == 'wallet_credited' || type == 'deposit_rejected') {
+          ref.read(depositHistoryProvider.notifier).load();
+        }
       } catch (e) {
         // ignore parse errors
       }
