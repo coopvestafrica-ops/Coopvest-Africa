@@ -302,14 +302,14 @@ class NotificationService {
           navigatorKey.currentState?.pushNamed('/savings-goal');
           break;
         case 'wallet_credited':
+        case 'deposit_rejected':
+          // Take user to the deposit status tracker so they can see full timeline + admin notes
+          navigatorKey.currentState?.pushNamed('/deposit-status');
+          break;
         case 'wallet_debited':
         case 'deposit':
         case 'withdrawal':
           navigatorKey.currentState?.pushNamed('/home');
-          break;
-        case 'deposit_rejected':
-          // Take user to notifications screen so they can see the reason
-          navigatorKey.currentState?.pushNamed('/notifications');
           break;
         case 'otp':
         case 'otp_sent':
