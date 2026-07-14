@@ -13,6 +13,7 @@ import '../savings/savings_goals_screen.dart';
 import '../transactions/transactions_history_screen.dart';
 import 'deposit_screen.dart';
 import 'withdrawal_screen.dart';
+import 'deposit_status_screen.dart';
 
 /// Wallet Dashboard Screen
 class WalletDashboardScreen extends ConsumerStatefulWidget {
@@ -318,11 +319,9 @@ class _WalletDashboardScreenState extends ConsumerState<WalletDashboardScreen> {
         ),
         _buildActionItem(
           context,
-          'Transfer',
-          Icons.swap_horiz,
-          () {
-            // Transfer functionality
-          },
+          'My Deposits',
+          Icons.receipt_long_outlined,
+          () => Navigator.push(context, MaterialPageRoute(builder: (context) => const DepositStatusScreen())),
         ),
         _buildActionItem(
           context,
