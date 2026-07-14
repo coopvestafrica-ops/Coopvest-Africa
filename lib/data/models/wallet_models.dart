@@ -416,3 +416,82 @@ class SavingsGoal extends Equatable {
         status,
       ];
 }
+/// DepositRequest Model — mirrors the `deposit_requests` Supabase table
+class DepositRequest extends Equatable {
+  final String id;
+  final String profileId;
+  final double amount;
+  final String currency;
+  final String status; // pending | verified | rejected | cancelled
+  final String? paymentMethod;
+  final String? paymentProofUrl;
+  final String? paymentReference;
+  final String? paymentDate;
+  final String? bankName;
+  final String? senderAccountName;
+  final String? senderAccountNumber;
+  final String? adminNotes;
+  final String? verifiedBy;
+  final DateTime? verifiedAt;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  const DepositRequest({
+    required this.id,
+    required this.profileId,
+    required this.amount,
+    required this.currency,
+    required this.status,
+    this.paymentMethod,
+    this.paymentProofUrl,
+    this.paymentReference,
+    this.paymentDate,
+    this.bankName,
+    this.senderAccountName,
+    this.senderAccountNumber,
+    this.adminNotes,
+    this.verifiedBy,
+    this.verifiedAt,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  factory DepositRequest.fromJson(Map<String, dynamic> json) {
+    DateTime? safeDate(dynamic v) =>
+        v == null ? null : DateTime.tryParse(v.toString());
+    double safeDouble(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString()) ?? 0.0;
+    }
+
+    return DepositRequest(
+      id: json['id']?.toString() ?? '',
+      profileId: json['profile_id']?.toString() ?? '',
+      amount: safeDouble(json['amount']),
+      currency: json['currency']?.toString() ?? 'NGN',
+      status: json['status']?.toString() ?? 'pending',
+      paymentMethod: json['payment_method']?.toString(),
+      paymentProofUrl: json['payment_proof_url']?.toString(),
+      paymentReference: json['payment_reference']?.toString(),
+      paymentDate: json['payment_date']?.toString(),
+      bankName: json['bank_name']?.toString(),
+      senderAccountName: json['sender_account_name']?.toString(),
+      senderAccountNumber: json['sender_account_number']?.toString(),
+      adminNotes: json['admin_notes']?.toString(),
+      verifiedBy: json['verified_by']?.toString(),
+      verifiedAt: safeDate(json['verified_at']),
+      createdAt: safeDate(json['created_at']) ?? DateTime.now(),
+      updatedAt: safeDate(json['updated_at']) ?? DateTime.now(),
+    );
+  }
+
+  bool get isPending  => status == 'pending';
+  bool get isVerified => status == 'verified';
+  bool get isRejected => status == 'rejected';
+
+  @override
+  List<Object?> get props => [id, profileId, amount, currency, status,
+    paymentMethod, paymentProofUrl, paymentReference, adminNotes,
+    verifiedBy, verifiedAt, createdAt, updatedAt];
+}
