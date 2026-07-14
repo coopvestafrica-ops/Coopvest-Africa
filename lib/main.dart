@@ -424,6 +424,8 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
             guarantorId: args['guarantorId']!,
           );
         },
+
+        '/deposit-status': (context) => const DepositStatusScreen(),
       },
     );
 
