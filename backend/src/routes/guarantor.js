@@ -537,6 +537,11 @@ router.post(
       const guarantorId = req.user.id;
       const { guarantor_name, guarantor_phone } = req.body || {};
 
+      // Explicit hit-log so we can confirm in Render logs whether requests
+      // are actually reaching this route (helps diagnose 404s caused by a
+      // stale deploy vs. a genuine routing bug).
+      logger.info(`[guarantor/confirm] loanId=${loanId} guarantorId=${guarantorId}`);
+
       const now = new Date().toISOString();
 
       // Check if a loan_guarantors row already exists for this user + loan
