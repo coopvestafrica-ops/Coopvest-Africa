@@ -34,9 +34,12 @@ const LATE_REPAYMENT_PENALTY_NGN = 3000;
 function getConsecutiveMissedMonths(loan) {
   // Use server-tracked missed_months if available
   if (typeof loan.missed_months === 'number') return loan.missed_months;
-  // Fallback: estimate from last_repayment_date vs today
-  if (!loan.disbursed_at) return 0;
-  const disbursed = new Date(loan.disbursed_at);
+  // Fallback: estimate from last_repayment_date vs today.
+  // `disbursed_at` doesn't exist on the loans table; `approved_at` is the
+  // closest actual populated timestamp for when the loan started.
+  const disbursedAtValue = loan.disbursed_at || loan.approved_at;
+  if (!disbursedAtValue) return 0;
+  const disbursed = new Date(disbursedAtValue);
   const now = new Date();
   const monthsSinceDisbursed =
     (now.getFullYear() - disbursed.getFullYear()) * 12 +
@@ -98,11 +101,16 @@ async function notifyGuarantors(loan) {
 async function processDue() {
   try {
     // Fetch all active/repaying loans
+    // NOTE: `disbursed_at` does not exist on the loans table (only
+    // `disbursed_by` does) — filtering on it caused PostgREST to 400 on
+    // every run. `approved_at` is the actual populated timestamp marking
+    // when a loan started, and the status filter already restricts us to
+    // live loans, so we use that instead.
     const { data: activeLoans, error } = await supabase
       .from('loans')
       .select('*')
       .in('status', ['active', 'repaying', 'overdue'])
-      .not('disbursed_at', 'is', null);
+      .not('approved_at', 'is', null);
 
     if (error) throw error;
     if (!activeLoans || activeLoans.length === 0) return;
