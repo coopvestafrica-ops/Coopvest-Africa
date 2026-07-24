@@ -55,12 +55,66 @@ router.get('/members', async (req, res) => {
     if (req.query.role) q = q.eq('role', req.query.role);
     if (req.query.isFlagged === 'true') q = q.eq('is_flagged', true);
     if (req.query.isActive === 'false') q = q.eq('is_active', false);
+    // Support status filter for admin dashboard
+    if (req.query.status === 'active') q = q.eq('is_active', true).eq('kyc_verified', true).eq('is_flagged', false);
+    if (req.query.status === 'suspended') q = q.eq('is_flagged', true);
+    if (req.query.status === 'pending') q = q.eq('is_active', true).eq('kyc_verified', false).eq('is_flagged', false);
+    if (req.query.status === 'inactive') q = q.eq('is_active', false);
     const { data, error, count } = await q;
     if (error) throw error;
-    res.json({ success: true, members: data || [], pagination: { page, limit, total: count || 0 } });
+    
+    // Return data in format expected by Admin Dashboard frontend
+    res.json({ 
+      data: data || [], 
+      total: count || 0, 
+      page, 
+      limit 
+    });
   } catch (err) {
     logger.error('admin members list error:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/members/stats
+ * Get member statistics for the Admin Dashboard
+ */
+router.get('/members/stats', async (req, res) => {
+  try {
+    const [
+      { count: total },
+      { count: active },
+      { count: inactive },
+      { count: suspended },
+      { count: pending },
+      { count: newThisMonth },
+      { count: loanDefaulters },
+      { count: highRisk },
+    ] = await Promise.all([
+      supabase.from('profiles').select('id', { count: 'exact', head: true }),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_active', true).eq('kyc_verified', true).eq('is_flagged', false),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_active', false),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_flagged', true),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_active', true).eq('kyc_verified', false).eq('is_flagged', false),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
+      supabase.from('loans').select('id', { count: 'exact', head: true }).eq('status', 'active').lt('remaining_balance', 0),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_flagged', true),
+    ]);
+
+    res.json({
+      total: total || 0,
+      active: active || 0,
+      inactive: inactive || 0,
+      suspended: suspended || 0,
+      pending: pending || 0,
+      newThisMonth: newThisMonth || 0,
+      loanDefaulters: loanDefaulters || 0,
+      highRisk: highRisk || 0,
+    });
+  } catch (err) {
+    logger.error('admin members stats error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
