@@ -290,8 +290,9 @@ app.use('/api/announcements', announcementRoutes);
 app.use('/api/contributions', contributionRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/termination', terminationRoutes);
-// Admin API routes mounted BEFORE features to handle /api/members
-app.use('/api/members', adminApiRoutes);
+// Admin API routes mounted at /api BEFORE features for frontend compatibility
+// This provides /api/members endpoint that the frontend expects
+app.use('/api', adminApiRoutes);
 app.use('/api/kyc', kycAdminRoutes);
 app.use('/api', featuresRoutes);
 app.use('/api/mobile-features', featuresRoutes);
