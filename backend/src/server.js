@@ -134,7 +134,7 @@ app.use(cors({
     return callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-ID', 'X-Requested-With', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-ID', 'X-Requested-With', 'Accept', 'x-service-token'],
   credentials: true,
   maxAge: 86400 // 24 hours
 }));
