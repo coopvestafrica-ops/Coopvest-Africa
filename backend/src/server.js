@@ -323,6 +323,10 @@ app.use('/api/v2/admin', adminApiRoutes);
 app.use('/api/v2/admin/kyc', kycAdminRoutes);
 app.use('/api/v2/admin/members', memberDetailRoutes);
 
+// Also mount admin API at /api/ for backwards compatibility with frontend
+app.use('/api', adminApiRoutes);
+app.use('/api/kyc', kycAdminRoutes);
+
 // In-app admin console endpoints (member JWT + IP whitelist)
 app.use('/api/v1/admin', adminIPWhitelist, adminRoutes);
 app.use('/api/v1/admin-tickets', adminIPWhitelist, adminTicketRoutes);
