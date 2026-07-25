@@ -290,6 +290,9 @@ app.use('/api/announcements', announcementRoutes);
 app.use('/api/contributions', contributionRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/termination', terminationRoutes);
+// Admin API routes mounted BEFORE features to handle /api/members
+app.use('/api/members', adminApiRoutes);
+app.use('/api/kyc', kycAdminRoutes);
 app.use('/api', featuresRoutes);
 app.use('/api/mobile-features', featuresRoutes);
 // Root-level alias in case Dio resolves absolute paths from host root
@@ -322,10 +325,6 @@ app.get('/api/auth/kyc/status', (req, res, next) => {
 app.use('/api/v2/admin', adminApiRoutes);
 app.use('/api/v2/admin/kyc', kycAdminRoutes);
 app.use('/api/v2/admin/members', memberDetailRoutes);
-
-// Also mount admin API at /api/ for backwards compatibility with frontend
-app.use('/api', adminApiRoutes);
-app.use('/api/kyc', kycAdminRoutes);
 
 // In-app admin console endpoints (member JWT + IP whitelist)
 app.use('/api/v1/admin', adminIPWhitelist, adminRoutes);
