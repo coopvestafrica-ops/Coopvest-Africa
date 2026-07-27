@@ -17,11 +17,12 @@ const { body, param, query } = require('express-validator');
 const router = express.Router();
 
 const supabase = require('../config/supabase');
-const { requireService } = require('../middleware/auth');
+const { authenticate, requireAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
 
-router.use(requireService);
+// Use authenticate middleware to verify Supabase JWT
+router.use(authenticate);
 
 function paging(req) {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);

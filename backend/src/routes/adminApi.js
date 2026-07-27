@@ -1,9 +1,8 @@
 /**
- * Cross-backend Admin API (service-token auth)
+ * Cross-backend Admin API (Supabase JWT auth)
  *
- * These endpoints are consumed by the Admin Dashboard's own API server, not
- * by a Supabase-authenticated member. They trust a shared secret header
- * (`X-Service-Token`) validated by the `requireService` middleware.
+ * These endpoints are consumed by the Admin Dashboard frontend.
+ * They authenticate using the Supabase JWT token from the logged-in admin.
  *
  * Responses are intentionally flat and stable so the admin HTTP client
  * can consume them without reshaping.
@@ -14,11 +13,13 @@ const { body, param } = require('express-validator');
 const router = express.Router();
 
 const supabase = require('../config/supabase');
-const { requireService } = require('../middleware/auth');
+const { authenticate, requireAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
 
-router.use(requireService);
+// Use authenticate middleware to verify Supabase JWT
+// For admin-only routes, use requireAdmin instead
+router.use(authenticate);
 
 function paging(req) {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
