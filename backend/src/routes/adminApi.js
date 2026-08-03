@@ -63,10 +63,34 @@ router.get('/members', async (req, res) => {
     if (req.query.status === 'inactive') q = q.eq('is_active', false);
     const { data, error, count } = await q;
     if (error) throw error;
-    
+
+    // Map raw profiles to Member interface expected by Admin Dashboard frontend
+    const members = (data || []).map((p) => {
+      const nameParts = (p.name || '').split(' ').filter(Boolean);
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      const status = p.is_flagged
+        ? 'suspended'
+        : p.is_active
+          ? (p.kyc_verified ? 'active' : 'pending')
+          : 'inactive';
+      return {
+        ...p,
+        memberId: p.user_id || p.id,
+        firstName,
+        lastName,
+        status,
+        joinDate: p.created_at,
+        totalContributions: 0,
+        activeLoan: 0,
+        riskScore: 0,
+        avatarInitials: (firstName[0] || '') + (lastName[0] || ''),
+      };
+    });
+
     // Return data in format expected by Admin Dashboard frontend
     res.json({ 
-      data: data || [], 
+      data: members, 
       total: count || 0, 
       page, 
       limit 
@@ -120,6 +144,26 @@ router.get('/members/stats', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/admin/members/:id/transactions
+ */
+router.get('/members/:id/transactions', async (req, res) => {
+  try {
+    const { page, limit, from, to } = paging(req);
+    const { data, error, count } = await supabase
+      .from('transactions')
+      .select('*', { count: 'exact' })
+      .eq('profile_id', req.params.id)
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    if (error) throw error;
+    res.json({ success: true, data: data || [], transactions: data || [], pagination: { page, limit, total: count || 0 } });
+  } catch (err) {
+    logger.error('admin member transactions error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/v1/admin/members/:id
  */
 router.get('/members/:id', async (req, res) => {
@@ -132,22 +176,45 @@ router.get('/members/:id', async (req, res) => {
     if (error) throw error;
     if (!profile) return res.status(404).json({ success: false, error: 'Member not found' });
 
-    const [wallet, savings, kyc, loans, tickets] = await Promise.all([
+    const [wallet, savings, kyc, loans, tickets, bankAccounts, kycDocuments] = await Promise.all([
       supabase.from('wallets').select('*').eq('profile_id', profile.id).maybeSingle(),
       supabase.from('savings').select('*').eq('profile_id', profile.id).maybeSingle(),
       supabase.from('kyc').select('*').eq('profile_id', profile.id).maybeSingle(),
       supabase.from('loans').select('*').eq('profile_id', profile.id).order('created_at', { ascending: false }),
       supabase.from('tickets').select('*').eq('profile_id', profile.id).order('created_at', { ascending: false }),
+      supabase.from('bank_accounts').select('*').eq('profile_id', profile.id).order('created_at', { ascending: false }).catch(() => ({ data: [] })),
+      supabase.from('kyc_documents').select('*').eq('profile_id', profile.id).order('created_at', { ascending: false }).catch(() => ({ data: [] })),
     ]);
+
+    const kycData = kyc.data || null;
+
     res.json({
       success: true,
       member: {
         ...profile,
+        // Flatten KYC identity fields to top-level for easy access in the frontend
+        bvn: profile.bvn || kycData?.bvn || null,
+        nin: profile.nin || kycData?.nin || null,
+        id_type: profile.id_type || kycData?.id_type || null,
+        id_number: profile.id_number || kycData?.id_number || null,
+        selfie_url: profile.selfie_url || kycData?.selfie_url || kycData?.selfie || null,
+        id_document_url: profile.id_document_url || kycData?.id_document_url || null,
+        kyc_status: profile.kyc_status || kycData?.status || null,
+        // Employment / registration fields from KYC
+        employer_name: profile.employer || profile.employer_name || kycData?.employer_name || null,
+        employment_type: profile.employment_type || kycData?.employment_type || null,
+        employer_staff_id: profile.staff_id || kycData?.employer_staff_id || null,
+        work_address: profile.work_address || kycData?.work_address || null,
+        // Registration form data (stored as JSONB in kyc.personal_info)
+        registration: kycData?.personal_info || null,
+        // Nested objects
         wallet: wallet.data || null,
         savings: savings.data || null,
-        kyc: kyc.data || null,
+        kyc: kycData,
         loans: loans.data || [],
         tickets: tickets.data || [],
+        bank_accounts: bankAccounts.data || [],
+        documents: kycDocuments.data || [],
       },
     });
   } catch (err) {
@@ -205,10 +272,14 @@ router.get('/loans', async (req, res) => {
       .range(from, to);
     if (req.query.status) q = q.eq('status', req.query.status);
     if (req.query.loanType) q = q.eq('loan_type', req.query.loanType);
+    // Accept both profileId and memberId (memberId is used by the admin dashboard profile page)
     if (req.query.profileId) q = q.eq('profile_id', req.query.profileId);
+    else if (req.query.memberId) q = q.eq('profile_id', req.query.memberId);
     const { data, error, count } = await q;
     if (error) throw error;
-    res.json({ success: true, loans: data || [], pagination: { page, limit, total: count || 0 } });
+    const loansArr = data || [];
+    // Return both `data` and `loans` keys so both old and new frontend code works
+    res.json({ success: true, data: loansArr, loans: loansArr, pagination: { page, limit, total: count || 0 } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
