@@ -13,13 +13,12 @@ const { body, param } = require('express-validator');
 const router = express.Router();
 
 const supabase = require('../config/supabase');
-const { authenticate, requireAdmin } = require('../middleware/auth');
+const { requireAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
 
-// Use authenticate middleware to verify Supabase JWT
-// For admin-only routes, use requireAdmin instead
-router.use(authenticate);
+// Apply requireAdmin to ALL routes in this router since they all require authentication
+router.use(requireAdmin);
 
 function paging(req) {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);

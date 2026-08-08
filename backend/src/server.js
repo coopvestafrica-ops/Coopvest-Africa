@@ -268,10 +268,6 @@ app.use('/api/v1/termination', terminationRoutes);
 // Each route set is mounted at BOTH prefixes to avoid 404s from either client.
 // This is intentional duplication to maintain backward compatibility.
 // ==============================================================================
-// Admin API routes MUST be mounted BEFORE other routes to ensure /api/dashboard/*, 
-// /api/contributions/monthly, /api/loans/status-breakdown work correctly
-app.use('/api', adminApiRoutes);
-
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/auth', emailVerificationRoutes);
 app.use('/api/referrals', requireFeatureFlag('referralSystem'), referralRoutes);
@@ -297,6 +293,9 @@ app.use('/api/termination', terminationRoutes);
 app.use('/api/kyc', kycAdminRoutes);
 app.use('/api', featuresRoutes);
 app.use('/api/mobile-features', featuresRoutes);
+// Admin API routes mounted at /api/admin AFTER other routes to avoid conflicts
+// Provides /api/admin/dashboard/*, /api/admin/contributions/monthly, /api/admin/loans/status-breakdown
+app.use('/api/admin', adminApiRoutes);
 // Root-level alias in case Dio resolves absolute paths from host root
 app.use('/guarantor', guarantorRoutes);
 
