@@ -128,18 +128,21 @@ router.get('/members/stats', async (req, res) => {
     ]);
 
     res.json({
-      total: total || 0,
-      active: active || 0,
-      inactive: inactive || 0,
-      suspended: suspended || 0,
-      pending: pending || 0,
-      newThisMonth: newThisMonth || 0,
-      loanDefaulters: loanDefaulters || 0,
-      highRisk: highRisk || 0,
+      success: true,
+      data: {
+        total: total || 0,
+        active: active || 0,
+        inactive: inactive || 0,
+        suspended: suspended || 0,
+        pending: pending || 0,
+        newThisMonth: newThisMonth || 0,
+        loanDefaulters: loanDefaulters || 0,
+        highRisk: highRisk || 0,
+      }
     });
   } catch (err) {
     logger.error('admin members stats error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
