@@ -266,18 +266,16 @@ router.get('/loans', async (req, res) => {
     const { page, limit, from, to } = paging(req);
     let q = supabase
       .from('loans')
-      .select('*, profile:profiles(id, user_id, name, email)', { count: 'exact' })
+      .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(from, to);
     if (req.query.status) q = q.eq('status', req.query.status);
     if (req.query.loanType) q = q.eq('loan_type', req.query.loanType);
-    // Accept both profileId and memberId (memberId is used by the admin dashboard profile page)
     if (req.query.profileId) q = q.eq('profile_id', req.query.profileId);
     else if (req.query.memberId) q = q.eq('profile_id', req.query.memberId);
     const { data, error, count } = await q;
     if (error) throw error;
     const loansArr = data || [];
-    // Return both `data` and `loans` keys so both old and new frontend code works
     res.json({ success: true, data: loansArr, loans: loansArr, pagination: { page, limit, total: count || 0 } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -468,7 +466,7 @@ router.get('/loans/portfolio-summary', async (req, res) => {
   try {
     const { data: loans, error } = await supabase
       .from('loans')
-      .select('status, amount, disbursed_at, maturity_date');
+      .select('status, amount, created_at, next_due_date');
 
     if (error) throw error;
 
@@ -477,13 +475,13 @@ router.get('/loans/portfolio-summary', async (req, res) => {
     
     const summary = {
       totalLoans: loansData.length,
-      activeLoans: loansData.filter(l => ['active', 'disbursed', 'approved'].includes(l.status)).length,
+      activeLoans: loansData.filter(l => ['active', 'approved'].includes(l.status)).length,
       completedLoans: loansData.filter(l => l.status === 'completed').length,
       defaultedLoans: loansData.filter(l => 
-        ['active', 'disbursed'].includes(l.status) && l.maturity_date && new Date(l.maturity_date) < now
+        l.status === 'active' && l.next_due_date && new Date(l.next_due_date) < now
       ).length,
       totalAmount: loansData.reduce((sum, l) => sum + Number(l.amount || 0), 0),
-      disbursedAmount: loansData.filter(l => ['disbursed', 'active'].includes(l.status))
+      activeAmount: loansData.filter(l => ['active', 'approved'].includes(l.status))
         .reduce((sum, l) => sum + Number(l.amount || 0), 0)
     };
 
@@ -611,7 +609,7 @@ router.get('/support', async (req, res) => {
     
     let query = supabase
       .from('tickets')
-      .select('*, profile:profiles(id, user_id, name, email)', { count: 'exact' })
+      .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(from, to);
     
