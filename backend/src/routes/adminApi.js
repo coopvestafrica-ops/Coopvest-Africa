@@ -461,6 +461,205 @@ router.get('/notifications', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/admin/loans/portfolio-summary
+ * Returns loan portfolio summary for dashboard
+ */
+router.get('/loans/portfolio-summary', async (req, res) => {
+  try {
+    const { data: loans, error } = await supabase
+      .from('loans')
+      .select('status, amount, disbursed_at, maturity_date');
+
+    if (error) throw error;
+
+    const loansData = loans || [];
+    const now = new Date();
+    
+    const summary = {
+      totalLoans: loansData.length,
+      activeLoans: loansData.filter(l => ['active', 'disbursed', 'approved'].includes(l.status)).length,
+      completedLoans: loansData.filter(l => l.status === 'completed').length,
+      defaultedLoans: loansData.filter(l => 
+        ['active', 'disbursed'].includes(l.status) && l.maturity_date && new Date(l.maturity_date) < now
+      ).length,
+      totalAmount: loansData.reduce((sum, l) => sum + Number(l.amount || 0), 0),
+      disbursedAmount: loansData.filter(l => ['disbursed', 'active'].includes(l.status))
+        .reduce((sum, l) => sum + Number(l.amount || 0), 0)
+    };
+
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/contributions/summary
+ * Returns contribution summary for dashboard
+ */
+router.get('/contributions/summary', async (req, res) => {
+  try {
+    const { data: savings, error: savingsError } = await supabase
+      .from('savings')
+      .select('total_saved, monthly_savings');
+
+    const { data: transactions, error: txError } = await supabase
+      .from('transactions')
+      .select('amount, type, status, created_at')
+      .in('type', ['deposit', 'savings_deposit', 'transfer_in'])
+      .eq('status', 'completed');
+
+    if (savingsError) throw savingsError;
+
+    const savingsData = savings || [];
+    const txData = transactions || [];
+
+    // Get this month's transactions
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const thisMonthTx = txData.filter(t => new Date(t.created_at) >= monthStart);
+
+    const summary = {
+      totalMembers: savingsData.length,
+      totalSaved: savingsData.reduce((sum, s) => sum + Number(s.total_saved || 0), 0),
+      monthlySavings: savingsData.reduce((sum, s) => sum + Number(s.monthly_savings || 0), 0),
+      monthlyContributions: thisMonthTx.reduce((sum, t) => sum + Number(t.amount || 0), 0),
+      transactionCount: txData.length
+    };
+
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/investments/portfolio
+ * Returns investment portfolio summary
+ */
+router.get('/investments/portfolio', async (req, res) => {
+  try {
+    const { data: pools, error: poolsError } = await supabase
+      .from('investment_pools')
+      .select('*');
+
+    const { data: participations, error: partError } = await supabase
+      .from('investment_participations')
+      .select('*');
+
+    if (poolsError) throw poolsError;
+
+    const poolsData = pools || [];
+    const partsData = participations || [];
+
+    const summary = {
+      totalPools: poolsData.length,
+      activePools: poolsData.filter(p => p.status === 'active').length,
+      totalInvested: partsData.reduce((sum, p) => sum + Number(p.amount || 0), 0),
+      totalParticipants: partsData.length,
+      pools: poolsData
+    };
+
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/compliance/summary
+ * Returns compliance summary
+ */
+router.get('/compliance/summary', async (req, res) => {
+  try {
+    const [
+      totalMembers,
+      kycVerified,
+      kycPending,
+      kycRejected
+    ] = await Promise.all([
+      supabase.from('profiles').select('id', { count: 'exact', head: true }),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('kyc_verified', true),
+      supabase.from('profiles').select('id', { count: 'exact', head: true })
+        .eq('kyc_verified', false).eq('is_active', true),
+      supabase.from('kyc_documents').select('id', { count: 'exact', head: true }).eq('status', 'rejected')
+    ]);
+
+    const summary = {
+      totalMembers: totalMembers.count || 0,
+      kycVerified: kycVerified.count || 0,
+      kycPending: kycPending.count || 0,
+      kycRejected: kycRejected.count || 0,
+      complianceRate: totalMembers.count > 0 
+        ? Math.round((kycVerified.count / totalMembers.count) * 10000) / 100 
+        : 0
+    };
+
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/support
+ * Returns support tickets summary
+ */
+router.get('/support', async (req, res) => {
+  try {
+    const { page, limit, from, to } = paging(req);
+    const status = req.query.status;
+    
+    let query = supabase
+      .from('tickets')
+      .select('*, profile:profiles(id, user_id, name, email)', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    
+    if (status) query = query.eq('status', status);
+    
+    const { data, error, count } = await query;
+    if (error) throw error;
+
+    res.json({ 
+      success: true, 
+      data: data || [],
+      pagination: { page, limit, total: count || 0 } 
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/interest-rates
+ * Returns interest rates configuration
+ */
+router.get('/interest-rates', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('system_settings')
+      .select('*')
+      .like('key', '%interest_rate%');
+
+    if (error) throw error;
+
+    // Return default rates if not configured
+    const rates = (data || []).reduce((acc, s) => {
+      acc[s.key] = s.value;
+      return acc;
+    }, {
+      savings_interest_rate: '5.0',
+      loan_interest_rate: '10.0',
+      investment_return_rate: '8.0'
+    });
+
+    res.json({ success: true, data: rates });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/v1/admin/notifications/broadcast
  */
 router.post(
