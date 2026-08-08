@@ -532,6 +532,315 @@ router.get('/overview', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Dashboard endpoints for Admin Dashboard
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/v1/admin/dashboard/summary
+ * Returns summary metrics for the admin dashboard
+ */
+router.get('/dashboard/summary', async (req, res) => {
+  try {
+    // Get all the counts we need
+    const [
+      totalMembers,
+      activeMembers,
+      kycPending,
+      totalLoans,
+      activeLoans,
+      defaulters,
+      totalContributions,
+      monthlyContributions,
+      totalInvestments,
+      openTickets
+    ] = await Promise.all([
+      // Total members
+      supabase.from('profiles').select('id', { count: 'exact', head: true }),
+      // Active members (verified KYC, not flagged)
+      supabase.from('profiles').select('id', { count: 'exact', head: true })
+        .eq('is_active', true).eq('is_flagged', false),
+      // KYC pending
+      supabase.from('profiles').select('id', { count: 'exact', head: true })
+        .eq('is_active', true).eq('kyc_verified', false),
+      // Total loans
+      supabase.from('loans').select('id, status, amount, disbursed_at, maturity_date'),
+      // Active loans (approved/disbursed, not completed/repaid)
+      supabase.from('loans').select('id, status, amount', { count: 'exact', head: true })
+        .in('status', ['approved', 'disbursed', 'active']),
+      // Defaulters (loans past due date)
+      supabase.from('loans').select('id', { count: 'exact', head: true })
+        .in('status', ['active', 'disbursed'])
+        .lt('maturity_date', new Date().toISOString()),
+      // Total contributions
+      supabase.from('savings').select('amount', { count: 'exact' }),
+      // This month's contributions
+      supabase.from('savings').select('amount')
+        .gte('created_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
+      // Total investments
+      supabase.from('investment_participations').select('amount', { count: 'exact' }),
+      // Open tickets
+      supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('status', 'open')
+    ]);
+
+    const loansData = totalLoans.data || [];
+    const totalLoanAmount = loansData.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const disbursedLoans = loansData.filter(l => ['disbursed', 'active', 'approved'].includes(l.status));
+    const disbursedAmount = disbursedLoans.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const completedLoans = loansData.filter(l => l.status === 'completed');
+    const completedAmount = completedLoans.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+
+    // Calculate repayment rate (completed loans / total disbursed loans)
+    const repaymentRate = disbursedLoans.length > 0 
+      ? ((disbursedLoans.length - defaulters.count) / disbursedLoans.length * 100) 
+      : 0;
+
+    // Calculate monthly growth (compare this month vs last month)
+    const lastMonthStart = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
+    const lastMonthEnd = new Date(new Date().getFullYear(), new Date().getMonth(), 0);
+    const { data: lastMonthContributions } = await supabase.from('savings')
+      .select('amount')
+      .gte('created_at', lastMonthStart.toISOString())
+      .lte('created_at', lastMonthEnd.toISOString());
+    
+    const lastMonthTotal = (lastMonthContributions || []).reduce((sum, c) => sum + Number(c.amount || 0), 0);
+    const thisMonthTotal = (monthlyContributions.data || []).reduce((sum, c) => sum + Number(c.amount || 0), 0);
+    const monthlyGrowth = lastMonthTotal > 0 ? ((thisMonthTotal - lastMonthTotal) / lastMonthTotal * 100) : (thisMonthTotal > 0 ? 100 : 0);
+
+    // Total contributions sum
+    const contributionsData = totalContributions.data || [];
+    const totalContribSum = contributionsData.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+
+    // Investments sum
+    const investmentsData = totalInvestments.data || [];
+    const totalInvestSum = investmentsData.reduce((sum, i) => sum + Number(i.amount || 0), 0);
+
+    res.json({
+      success: true,
+      data: {
+        totalSavingsVolume: totalContribSum,
+        totalLoansIssued: disbursedAmount,
+        activeMembers: activeMembers.count || 0,
+        totalMembers: totalMembers.count || 0,
+        repaymentRate: Math.round(repaymentRate * 10) / 10,
+        monthlyGrowth: Math.round(monthlyGrowth * 10) / 10,
+        riskExposure: defaulters.count || 0,
+        activeDefaulters: defaulters.count || 0,
+        monthlySavingsVolume: thisMonthTotal,
+        totalInvestments: totalInvestSum,
+        pendingKYC: kycPending.count || 0,
+        openTickets: openTickets.count || 0,
+        loans: {
+          total: loansData.length,
+          disbursed: disbursedLoans.length,
+          disbursedAmount,
+          completed: completedLoans.length,
+          completedAmount,
+          active: activeLoans.count || 0,
+          defaulters: defaulters.count || 0
+        }
+      }
+    });
+  } catch (err) {
+    logger.error('dashboard summary error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/dashboard/recent-activity
+ * Returns recent activity for the admin dashboard
+ */
+router.get('/dashboard/recent-activity', async (req, res) => {
+  try {
+    const limit = Math.min(50, parseInt(req.query.limit, 10) || 10);
+
+    // Get recent transactions
+    const { data: transactions } = await supabase
+      .from('transactions')
+      .select('*, profile:profiles(id, user_id, name, email)')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    // Get recent member registrations
+    const { data: recentMembers } = await supabase
+      .from('profiles')
+      .select('id, user_id, name, email, created_at')
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    // Get recent loans
+    const { data: recentLoans } = await supabase
+      .from('loans')
+      .select('id, amount, status, created_at, profile:profiles(id, user_id, name, email)')
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    // Combine and sort activities
+    const activities = [];
+
+    // Add transactions as activities
+    (transactions || []).forEach(t => {
+      activities.push({
+        id: t.id,
+        type: 'transaction',
+        action: t.type || t.transaction_type,
+        amount: t.amount,
+        status: t.status,
+        user: t.profile?.name || t.profile?.email,
+        created_at: t.created_at
+      });
+    });
+
+    // Add recent registrations
+    (recentMembers || []).forEach(m => {
+      activities.push({
+        id: m.id,
+        type: 'member',
+        action: 'registered',
+        user: m.name || m.email,
+        created_at: m.created_at
+      });
+    });
+
+    // Add recent loans
+    (recentLoans || []).forEach(l => {
+      activities.push({
+        id: l.id,
+        type: 'loan',
+        action: l.status,
+        amount: l.amount,
+        user: l.profile?.name || l.profile?.email,
+        created_at: l.created_at
+      });
+    });
+
+    // Sort by date and limit
+    activities.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const finalActivities = activities.slice(0, limit);
+
+    res.json({
+      success: true,
+      data: finalActivities
+    });
+  } catch (err) {
+    logger.error('dashboard recent activity error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/contributions/monthly
+ * Returns monthly contribution data for charts
+ */
+router.get('/contributions/monthly', async (req, res) => {
+  try {
+    const months = parseInt(req.query.months, 10) || 6;
+    const startDate = new Date();
+    startDate.setMonth(startDate.getMonth() - months);
+    startDate.setDate(1);
+
+    const { data: contributions, error } = await supabase
+      .from('savings')
+      .select('amount, created_at')
+      .gte('created_at', startDate.toISOString())
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    // Group by month
+    const monthlyData = {};
+    const now = new Date();
+    
+    // Initialize months with 0
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setMonth(d.getMonth() - i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      monthlyData[key] = { month: key, amount: 0, count: 0 };
+    }
+
+    // Sum contributions by month
+    (contributions || []).forEach(c => {
+      const d = new Date(c.created_at);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (monthlyData[key]) {
+        monthlyData[key].amount += Number(c.amount || 0);
+        monthlyData[key].count += 1;
+      }
+    });
+
+    const result = Object.values(monthlyData).map(m => ({
+      month: m.month,
+      amount: Math.round(m.amount * 100) / 100,
+      count: m.count
+    }));
+
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (err) {
+    logger.error('monthly contributions error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/loans/status-breakdown
+ * Returns loan status breakdown
+ */
+router.get('/loans/status-breakdown', async (req, res) => {
+  try {
+    const { data: loans, error } = await supabase
+      .from('loans')
+      .select('status, amount');
+
+    if (error) throw error;
+
+    const breakdown = {
+      pending: { count: 0, amount: 0 },
+      approved: { count: 0, amount: 0 },
+      disbursed: { count: 0, amount: 0 },
+      active: { count: 0, amount: 0 },
+      completed: { count: 0, amount: 0 },
+      defaulted: { count: 0, amount: 0 },
+      rejected: { count: 0, amount: 0 }
+    };
+
+    const now = new Date();
+
+    (loans || []).forEach(l => {
+      let status = l.status;
+      
+      // Check for default
+      if (['active', 'disbursed'].includes(l.status) && l.maturity_date && new Date(l.maturity_date) < now) {
+        status = 'defaulted';
+      }
+
+      if (breakdown[status]) {
+        breakdown[status].count += 1;
+        breakdown[status].amount += Number(l.amount || 0);
+      }
+    });
+
+    // Format response
+    const result = Object.entries(breakdown).map(([status, data]) => ({
+      status,
+      count: data.count,
+      amount: Math.round(data.amount * 100) / 100
+    }));
+
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (err) {
+    logger.error('loans status breakdown error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Investment pool management (admin-only CRUD)
 // ---------------------------------------------------------------------------
 router.get('/investments', async (req, res) => {
