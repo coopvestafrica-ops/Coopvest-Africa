@@ -148,7 +148,7 @@ const optionalAuth = async (req, res, next) => {
 
 const requireAdmin = (req, res, next) => {
   return authenticate(req, res, () => {
-    if (req.user && ['admin', 'superadmin', 'staff'].includes(req.user.role)) {
+    if (req.user && ['admin', 'superadmin', 'super_admin', 'staff'].includes(req.user.role)) {
       return next();
     }
     res.status(403).json({ success: false, error: 'Admin access required' });
