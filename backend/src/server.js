@@ -268,6 +268,10 @@ app.use('/api/v1/termination', terminationRoutes);
 // Each route set is mounted at BOTH prefixes to avoid 404s from either client.
 // This is intentional duplication to maintain backward compatibility.
 // ==============================================================================
+// Admin API routes MUST be mounted BEFORE other routes to ensure /api/dashboard/*, 
+// /api/contributions/monthly, /api/loans/status-breakdown work correctly
+app.use('/api', adminApiRoutes);
+
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/auth', emailVerificationRoutes);
 app.use('/api/referrals', requireFeatureFlag('referralSystem'), referralRoutes);
@@ -290,9 +294,6 @@ app.use('/api/announcements', announcementRoutes);
 app.use('/api/contributions', contributionRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/termination', terminationRoutes);
-// Admin API routes mounted at /api BEFORE features for frontend compatibility
-// This provides /api/members endpoint that the frontend expects
-app.use('/api', adminApiRoutes);
 app.use('/api/kyc', kycAdminRoutes);
 app.use('/api', featuresRoutes);
 app.use('/api/mobile-features', featuresRoutes);
