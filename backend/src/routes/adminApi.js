@@ -548,7 +548,7 @@ router.get('/dashboard/summary', async (req, res) => {
       totalLoans,
       activeLoans,
       defaulters,
-      totalContributions,
+      totalSavings,
       monthlyContributions,
       totalInvestments,
       openTickets
@@ -570,10 +570,12 @@ router.get('/dashboard/summary', async (req, res) => {
       supabase.from('loans').select('id', { count: 'exact', head: true })
         .in('status', ['active', 'disbursed'])
         .lt('maturity_date', new Date().toISOString()),
-      // Total contributions
-      supabase.from('savings').select('amount', { count: 'exact' }),
-      // This month's contributions
-      supabase.from('savings').select('amount')
+      // Total savings (from savings table)
+      supabase.from('savings').select('total_saved'),
+      // This month's contributions (from transactions)
+      supabase.from('transactions').select('amount')
+        .in('type', ['deposit', 'savings_deposit', 'transfer_in'])
+        .eq('status', 'completed')
         .gte('created_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
       // Total investments
       supabase.from('investment_participations').select('amount', { count: 'exact' }),
@@ -582,7 +584,6 @@ router.get('/dashboard/summary', async (req, res) => {
     ]);
 
     const loansData = totalLoans.data || [];
-    const totalLoanAmount = loansData.reduce((sum, l) => sum + Number(l.amount || 0), 0);
     const disbursedLoans = loansData.filter(l => ['disbursed', 'active', 'approved'].includes(l.status));
     const disbursedAmount = disbursedLoans.reduce((sum, l) => sum + Number(l.amount || 0), 0);
     const completedLoans = loansData.filter(l => l.status === 'completed');
@@ -596,8 +597,10 @@ router.get('/dashboard/summary', async (req, res) => {
     // Calculate monthly growth (compare this month vs last month)
     const lastMonthStart = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
     const lastMonthEnd = new Date(new Date().getFullYear(), new Date().getMonth(), 0);
-    const { data: lastMonthContributions } = await supabase.from('savings')
+    const { data: lastMonthContributions } = await supabase.from('transactions')
       .select('amount')
+      .in('type', ['deposit', 'savings_deposit', 'transfer_in'])
+      .eq('status', 'completed')
       .gte('created_at', lastMonthStart.toISOString())
       .lte('created_at', lastMonthEnd.toISOString());
     
@@ -605,9 +608,9 @@ router.get('/dashboard/summary', async (req, res) => {
     const thisMonthTotal = (monthlyContributions.data || []).reduce((sum, c) => sum + Number(c.amount || 0), 0);
     const monthlyGrowth = lastMonthTotal > 0 ? ((thisMonthTotal - lastMonthTotal) / lastMonthTotal * 100) : (thisMonthTotal > 0 ? 100 : 0);
 
-    // Total contributions sum
-    const contributionsData = totalContributions.data || [];
-    const totalContribSum = contributionsData.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+    // Total savings sum (from savings table)
+    const savingsData = totalSavings.data || [];
+    const totalContribSum = savingsData.reduce((sum, s) => sum + Number(s.total_saved || 0), 0);
 
     // Investments sum
     const investmentsData = totalInvestments.data || [];
@@ -738,9 +741,12 @@ router.get('/contributions/monthly', async (req, res) => {
     startDate.setMonth(startDate.getMonth() - months);
     startDate.setDate(1);
 
-    const { data: contributions, error } = await supabase
-      .from('savings')
+    // Get contributions from transactions table (deposits/savings)
+    const { data: transactions, error } = await supabase
+      .from('transactions')
       .select('amount, created_at')
+      .in('type', ['deposit', 'savings_deposit', 'transfer_in'])
+      .eq('status', 'completed')
       .gte('created_at', startDate.toISOString())
       .order('created_at', { ascending: true });
 
@@ -759,11 +765,11 @@ router.get('/contributions/monthly', async (req, res) => {
     }
 
     // Sum contributions by month
-    (contributions || []).forEach(c => {
-      const d = new Date(c.created_at);
+    (transactions || []).forEach(t => {
+      const d = new Date(t.created_at);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       if (monthlyData[key]) {
-        monthlyData[key].amount += Number(c.amount || 0);
+        monthlyData[key].amount += Number(t.amount || 0);
         monthlyData[key].count += 1;
       }
     });
