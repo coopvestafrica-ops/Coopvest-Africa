@@ -660,6 +660,167 @@ router.get('/interest-rates', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/admin/analytics/repayment-trend
+ * Returns monthly repayment rate trend
+ */
+router.get('/analytics/repayment-trend', async (req, res) => {
+  try {
+    const months = parseInt(req.query.months, 10) || 6;
+    const trend = [];
+    
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      const monthStart = new Date(d.getFullYear(), d.getMonth(), 1);
+      const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      
+      // Get all loans that were active during this month
+      const { data: loans } = await supabase
+        .from('loans')
+        .select('status, maturity_date, disbursed_at')
+        .lte('disbursed_at', monthEnd.toISOString());
+
+      const loansData = loans || [];
+      const activeLoans = loansData.filter(l => 
+        ['active', 'disbursed'].includes(l.status) || 
+        (l.maturity_date && new Date(l.maturity_date) < monthEnd)
+      );
+      
+      const defaultedLoans = activeLoans.filter(l => 
+        l.maturity_date && new Date(l.maturity_date) < monthEnd
+      );
+      
+      const repaymentRate = activeLoans.length > 0 
+        ? Math.round((activeLoans.length - defaultedLoans.length) / activeLoans.length * 10000) / 100 
+        : 100;
+
+      trend.push({
+        month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        rate: repaymentRate,
+        active: activeLoans.length,
+        defaulted: defaultedLoans.length
+      });
+    }
+
+    res.json({ success: true, data: trend });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/analytics/risk-exposure
+ * Returns risk exposure metrics
+ */
+router.get('/analytics/risk-exposure', async (req, res) => {
+  try {
+    const { data: loans } = await supabase
+      .from('loans')
+      .select('status, amount, maturity_date, disbursed_at');
+
+    const loansData = loans || [];
+    const now = new Date();
+    const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+
+    const activeLoans = loansData.filter(l => ['active', 'disbursed'].includes(l.status));
+    const defaultedLoans = activeLoans.filter(l => 
+      l.maturity_date && new Date(l.maturity_date) < now
+    );
+    const atRisk30 = activeLoans.filter(l =>
+      l.maturity_date && 
+      new Date(l.maturity_date) >= now && 
+      new Date(l.maturity_date) <= thirtyDaysFromNow
+    );
+    const atRisk90 = activeLoans.filter(l =>
+      l.maturity_date && 
+      new Date(l.maturity_date) > thirtyDaysFromNow && 
+      new Date(l.maturity_date) <= ninetyDaysFromNow
+    );
+
+    const totalExposure = activeLoans.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const defaultedAmount = defaultedLoans.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const atRisk30Amount = atRisk30.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const atRisk90Amount = atRisk90.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+
+    res.json({ 
+      success: true, 
+      data: {
+        totalExposure,
+        defaultedAmount,
+        defaultedCount: defaultedLoans.length,
+        atRisk30Amount,
+        atRisk30Count: atRisk30.length,
+        atRisk90Amount,
+        atRisk90Count: atRisk90.length,
+        riskPercentage: totalExposure > 0 ? Math.round((defaultedAmount / totalExposure) * 10000) / 100 : 0
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/analytics/defaulter-trend
+ * Returns monthly defaulter trend
+ */
+router.get('/analytics/defaulter-trend', async (req, res) => {
+  try {
+    const months = parseInt(req.query.months, 10) || 6;
+    const trend = [];
+    
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      
+      const { data: loans } = await supabase
+        .from('loans')
+        .select('status, maturity_date')
+        .in('status', ['active', 'disbursed']);
+
+      const loansData = loans || [];
+      const defaultedLoans = loansData.filter(l => 
+        l.maturity_date && new Date(l.maturity_date) < monthEnd
+      );
+
+      trend.push({
+        month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        count: defaultedLoans.length,
+        percentage: loansData.length > 0 
+          ? Math.round((defaultedLoans.length / loansData.length) * 10000) / 100 
+          : 0
+      });
+    }
+
+    res.json({ success: true, data: trend });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/login-history/log
+ */
+router.get('/login-history/log', async (req, res) => {
+  try {
+    const { page, limit, from, to } = paging(req);
+    const { data, error, count } = await supabase
+      .from('audit_logs')
+      .select('*, profile:profiles(id, user_id, name, email)', { count: 'exact' })
+      .eq('action', 'LOGIN')
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    
+    if (error) throw error;
+    res.json({ success: true, data: data || [], pagination: { page, limit, total: count || 0 } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/v1/admin/notifications/broadcast
  */
 router.post(
