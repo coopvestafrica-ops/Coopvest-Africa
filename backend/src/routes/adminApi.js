@@ -89,6 +89,7 @@ router.get('/members', async (req, res) => {
 
     // Return data in format expected by Admin Dashboard frontend
     res.json({ 
+      success: true,
       data: members, 
       total: count || 0, 
       page, 
