@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 import '../utils/utils.dart';
 import '../../config/app_config.dart';
 import '../services/security_service.dart';
@@ -435,15 +436,29 @@ class LoggingInterceptor extends Interceptor {
   }
 }
 
-/// Auth Interceptor — reads token from secure storage and attaches it
+/// Auth Interceptor — attaches the freshest available auth token.
+///
+/// Prefers the live Supabase session token (auto-refreshed in memory by the
+/// Supabase Flutter SDK) over the token persisted in secure storage, which may
+/// be stale/expired. Falls back to secure storage only when no Supabase
+/// session is available.
 class AuthInterceptor extends Interceptor {
   @override
   Future<void> onRequest(
       RequestOptions options, RequestInterceptorHandler handler) async {
     try {
-      final token = await _secureStorage.read(key: _accessTokenKey);
-      if (token != null && token.isNotEmpty) {
-        options.headers['Authorization'] = 'Bearer $token';
+      // Prefer the live Supabase session token (always fresh).
+      final liveToken = sb.Supabase.instance.client.auth.currentSession?.accessToken;
+      if (liveToken != null && liveToken.isNotEmpty) {
+        options.headers['Authorization'] = 'Bearer $liveToken';
+        // Keep secure storage in sync for offline/restore scenarios.
+        await _secureStorage.write(key: _accessTokenKey, value: liveToken);
+      } else {
+        // Fall back to persisted token when no live session exists.
+        final storedToken = await _secureStorage.read(key: _accessTokenKey);
+        if (storedToken != null && storedToken.isNotEmpty) {
+          options.headers['Authorization'] = 'Bearer $storedToken';
+        }
       }
     } catch (e) {
       logger.e('AuthInterceptor: Failed to read token: $e');

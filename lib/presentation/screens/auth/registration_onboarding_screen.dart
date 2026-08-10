@@ -494,9 +494,10 @@ class _RegistrationOnboardingScreenState
       } catch (e) {
         logger.e('Registration data submission error: \$e');
         if (mounted) {
+          final errorDetail = e.toString().replaceFirst('Exception: ', '').replaceFirst('AuthException: ', '');
           await _showRetryDialog(
-            'Could not save your registration details. Please check your '
-            'connection and try again.',
+            'Could not save your registration details: \$errorDetail. '
+            'Please check your connection and try again.',
           );
         }
         return;
