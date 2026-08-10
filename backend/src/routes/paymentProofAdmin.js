@@ -4,7 +4,7 @@
  * Admin endpoints for managing and verifying payment proofs submitted by members.
  * Used by the Admin Dashboard to review, approve, or reject payment proofs.
  * 
- * Authentication: Service token via X-Service-Token header (requireService middleware)
+ * Authentication: Supabase JWT (requireAdmin middleware) — flows with the existing Admin Dashboard integration on this backend.
  */
 
 const express = require('express');
@@ -12,12 +12,12 @@ const { body, param, query } = require('express-validator');
 const router = express.Router();
 
 const supabase = require('../config/supabase');
-const { requireService } = require('../middleware/auth');
+const { requireAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
 const notifyService = require('../services/notifyService');
 
-router.use(requireService);
+router.use(requireAdmin);
 
 function paging(req) {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -28,7 +28,7 @@ function paging(req) {
 async function logAdminAction(action, resource, resourceId, metadata = {}, req = null) {
   try {
     await supabase.from('audit_logs').insert({
-      actor_id: null,
+      actor_id: req?.user?.id || null,
       actor_type: 'admin',
       action,
       resource,
@@ -403,7 +403,7 @@ router.post(
         .update({
           status: 'approved',
           approved_at: now,
-          approved_by: null, // Service token - admin identification
+          approved_by: req.user.id,
           admin_notes: admin_notes || null,
           updated_at: now,
         })
@@ -477,7 +477,7 @@ router.post(
  * Reject a payment proof
  */
 router.post(
-  '/id/reject',
+  '/:id/reject',
   [
     param('id').isUUID(),
     body('reason').isString().isLength({ min: 10, max: 500 }),

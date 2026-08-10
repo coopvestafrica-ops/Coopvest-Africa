@@ -48,14 +48,14 @@ const analyticsRoutes = require('./routes/analytics');
 const adminApiRoutes = require('./routes/adminApi');
 const kycAdminRoutes = require('./routes/kycAdmin');
 const memberDetailRoutes = require('./routes/memberDetail');
+const paymentProofRoutes = require('./routes/paymentProofs');
+const paymentProofAdminRoutes = require('./routes/paymentProofAdmin');
 const guarantorRoutes = require('./routes/guarantor');
 const announcementRoutes = require('./routes/announcements');
 const contributionRoutes = require('./routes/contributions');
 const documentRoutes = require('./routes/documents');
 const terminationRoutes = require('./routes/termination');
 const featuresRoutes = require('./routes/features');
-const paymentProofRoutes = require('./routes/paymentProofs');
-const paymentProofAdminRoutes = require('./routes/paymentProofAdmin');
 
 // Import middleware
 const errorHandler = require('./middleware/errorHandler');
@@ -136,7 +136,7 @@ app.use(cors({
     return callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-ID', 'X-Requested-With', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-ID', 'X-Requested-With', 'Accept', 'x-service-token'],
   credentials: true,
   maxAge: 86400 // 24 hours
 }));
@@ -294,8 +294,12 @@ app.use('/api/contributions', contributionRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/termination', terminationRoutes);
 app.use('/api/payment-proofs', paymentProofRoutes);
+app.use('/api/kyc', kycAdminRoutes);
 app.use('/api', featuresRoutes);
 app.use('/api/mobile-features', featuresRoutes);
+// Admin API routes mounted at /api/admin AFTER other routes to avoid conflicts
+// Provides /api/admin/dashboard/*, /api/admin/contributions/monthly, /api/admin/loans/status-breakdown
+app.use('/api/admin', adminApiRoutes);
 // Root-level alias in case Dio resolves absolute paths from host root
 app.use('/guarantor', guarantorRoutes);
 

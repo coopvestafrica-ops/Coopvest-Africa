@@ -7,6 +7,9 @@
  */
 
 const crypto = require('crypto');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const express = require('express');
 const { body } = require('express-validator');
 const router = express.Router();
@@ -15,8 +18,63 @@ const supabase = require('../config/supabase');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
+const notifyService = require('../services/notifyService');
+const alertService = require('../services/alertService');
 
 const newRef = (prefix) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+/**
+ * Notify all admin/staff profiles about a new deposit request.
+ * Non-fatal: errors are logged but never bubble up to the caller.
+ */
+async function notifyAdminsNewDeposit({ amount, userId, depositId, hasProof }) {
+  try {
+    const amountFmt = Number(amount).toLocaleString('en-NG', { style: 'currency', currency: 'NGN' });
+    const proofNote = hasProof ? ' (proof attached)' : ' (no proof)';
+    const title = 'New Deposit Request';
+    const body = `A deposit of ${amountFmt} has been submitted${proofNote}. Verify in the admin dashboard.`;
+
+    // 1. Fetch all admin/staff profile IDs
+    const { data: admins } = await supabase
+      .from('profiles')
+      .select('id, email')
+      .in('role', ['admin', 'super_admin', 'superadmin', 'staff', 'operator']);
+
+    if (!admins || admins.length === 0) {
+      logger.info('notifyAdminsNewDeposit: no admin profiles found');
+      return;
+    }
+
+    const profileIds = admins.map(a => a.id);
+    const adminEmails = admins.map(a => a.email).filter(Boolean);
+
+    // 2. In-app notifications + FCM push for each admin
+    await notifyService.broadcast({
+      profileIds,
+      channels: ['in_app', 'push'],
+      title,
+      body,
+      type: 'deposit',
+    });
+
+    // 3. Email alert via alertService SMTP (non-blocking)
+    if (adminEmails.length > 0) {
+      await alertService.sendEmailAlert({
+        title: `💰 ${title}`,
+        message: `${body}<br><br>Deposit ID: <code>${depositId || 'N/A'}</code><br>User ID: <code>${userId}</code>`,
+        auditId: depositId || 'deposit',
+        userId,
+        riskLevel: 'INFO',
+        timestamp: new Date().toISOString(),
+        metadata: { amount, hasProof },
+      }).catch(err => logger.warn('Admin deposit email failed (non-fatal):', err.message));
+    }
+
+    logger.info(`Admin deposit notification sent to ${profileIds.length} admin(s)`);
+  } catch (err) {
+    logger.warn('notifyAdminsNewDeposit error (non-fatal):', err.message);
+  }
+}
 const newTransactionId = () => `TXN-${crypto.randomUUID()}`;
 
 async function ensureWallet(profileId) {
@@ -150,11 +208,12 @@ router.post(
     body('bank_name').optional().isString(),
     body('sender_account_name').optional().isString(),
     body('sender_account_number').optional().isString(),
+    body('proof_url').optional().isURL(),
   ],
   validate,
   async (req, res) => {
     try {
-      const { amount, description, payment_reference, payment_date, bank_name, sender_account_name, sender_account_number } = req.body;
+      const { amount, description, payment_reference, payment_date, bank_name, sender_account_name, sender_account_number, proof_url } = req.body;
 
       // Create a PENDING transaction (no wallet credit yet)
       const txn = await recordTransaction(req.user.id, {
@@ -166,30 +225,46 @@ router.post(
         payment_method: 'bank_transfer',
       });
 
-      // Create deposit request record for admin verification
-      const { data: depositRequest, error: depositErr } = await supabase
-        .from('deposit_requests')
-        .insert({
-          profile_id: req.user.id,
-          transaction_id: txn.id,
-          amount: Number(amount),
-          currency: 'NGN',
-          status: 'pending',
-          payment_reference: payment_reference || null,
-          payment_date: payment_date || null,
-          bank_name: bank_name || null,
-          sender_account_name: sender_account_name || null,
-          sender_account_number: sender_account_number || null,
-        })
-        .select('*')
-        .single();
-
-      if (depositErr) {
-        logger.error('Deposit request creation error:', depositErr);
-        throw depositErr;
+      // Create deposit request record for admin verification.
+      // Non-fatal: if the deposit_requests table does not yet exist (pending migration),
+      // the transaction is still recorded so the user is not blocked.
+      let depositRequest = null;
+      try {
+        const { data: dr, error: depositErr } = await supabase
+          .from('deposit_requests')
+          .insert({
+            profile_id: req.user.id,
+            transaction_id: txn.id,
+            amount: Number(amount),
+            currency: 'NGN',
+            status: 'pending',
+            payment_reference: payment_reference || null,
+            payment_date: payment_date || null,
+            bank_name: bank_name || null,
+            sender_account_name: sender_account_name || null,
+            sender_account_number: sender_account_number || null,
+            payment_proof_url: proof_url || null,
+          })
+          .select('*')
+          .single();
+        if (depositErr) {
+          logger.warn('deposit_requests insert failed (run migration 001_create_deposit_requests.sql):', depositErr.message);
+        } else {
+          depositRequest = dr;
+        }
+      } catch (drErr) {
+        logger.warn('deposit_requests table error (non-fatal):', drErr.message);
       }
 
-      logger.info(`Deposit request created for user ${req.user.id}: ₦${amount}`);
+      logger.info(`Deposit request submitted for user ${req.user.id}: ₦${amount}`);
+
+      // Notify admins — fire-and-forget, never blocks the response
+      notifyAdminsNewDeposit({
+        amount,
+        userId: req.user.id,
+        depositId: depositRequest?.id,
+        hasProof: !!proof_url,
+      }).catch(() => {}); // already logs internally
 
       res.status(201).json({
         success: true,
@@ -452,6 +527,42 @@ router.get('/payment-settings', authenticate, async (req, res) => {
   } catch (err) {
     logger.error('wallet payment-settings error:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
+/**
+ * POST /api/v1/wallet/upload-proof — Upload a bank-transfer proof screenshot.
+ * Returns { success: true, url: '<public-url>' }.
+ * The URL is then passed as `proof_url` to POST /wallet/contribute.
+ */
+router.post('/upload-proof', authenticate, upload.single('proof'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No file uploaded.' });
+    }
+    const ext = (req.file.originalname.split('.').pop() || 'jpg').toLowerCase();
+    if (!['jpg', 'jpeg', 'png', 'pdf'].includes(ext)) {
+      return res.status(400).json({ success: false, message: 'Only JPG, PNG, or PDF allowed.' });
+    }
+    const storagePath = `proofs/${req.user.id}/${uuidv4()}.${ext}`;
+    const { error: uploadError } = await supabase.storage
+      .from('deposit-proofs')
+      .upload(storagePath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false,
+      });
+    if (uploadError) throw uploadError;
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('deposit-proofs')
+      .getPublicUrl(storagePath);
+
+    logger.info(`Deposit proof uploaded for user ${req.user.id}: ${storagePath}`);
+    res.json({ success: true, url: publicUrl });
+  } catch (err) {
+    logger.error('upload-proof error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Upload failed.' });
   }
 });
 

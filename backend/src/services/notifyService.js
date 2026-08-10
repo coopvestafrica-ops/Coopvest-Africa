@@ -421,155 +421,6 @@ async function notifyRolloverGuarantorReplaced({
   logger.info(`Rollover replacement consent request sent to guarantor ${newGuarantorProfileId} for rollover ${rolloverId}`);
 }
 
-// ── Payment Proof Notifications ─────────────────────────────────────────────
-
-/**
- * Notify member that their payment proof has been approved and credited.
- */
-async function notifyPaymentProofApproved({
-  profileId,
-  amount,
-  paymentType,
-  receiptNumber,
-  transactionReference,
-}) {
-  const paymentTypeLabel = {
-    monthly_contribution: 'Monthly Contribution',
-    loan_repayment: 'Loan Repayment',
-    registration_fee: 'Registration Fee',
-    investment: 'Investment',
-    other: 'Payment',
-  }[paymentType] || 'Payment';
-
-  const title = 'Payment Verified! 🎉';
-  const body = `Your ${paymentTypeLabel} of ₦${Number(amount).toLocaleString()} has been verified and successfully credited to your Coopvest Africa account.${receiptNumber ? ` Receipt: ${receiptNumber}` : ''} Thank you.`;
-
-  const type = 'payment_proof_approved';
-  const data = {
-    paymentType,
-    amount: String(amount),
-    receiptNumber: receiptNumber || '',
-    transactionReference: transactionReference || '',
-  };
-
-  await Promise.all([
-    sendInApp({ profileId, title, body, type, priority: 'high' }),
-    pushToProfile({ profileId, title, body, type, data }),
-  ]);
-
-  logger.info(`Payment proof approved notification sent to ${profileId}`);
-}
-
-/**
- * Notify member that their payment proof has been rejected.
- */
-async function notifyPaymentProofRejected({
-  profileId,
-  amount,
-  paymentType,
-  rejectionReason,
-  rejectionCategory,
-  transactionReference,
-}) {
-  const paymentTypeLabel = {
-    monthly_contribution: 'Monthly Contribution',
-    loan_repayment: 'Loan Repayment',
-    registration_fee: 'Registration Fee',
-    investment: 'Investment',
-    other: 'Payment',
-  }[paymentType] || 'Payment';
-
-  // Map common rejection categories to user-friendly messages
-  const categoryMessages = {
-    blurry_receipt: 'The uploaded receipt is blurry and cannot be verified.',
-    invalid_reference: 'The transaction reference provided is invalid or cannot be verified.',
-    amount_mismatch: 'The amount entered does not match the transaction record.',
-    payment_not_found: 'We could not locate this payment in our records.',
-    duplicate_submission: 'A payment proof for this transaction has already been submitted.',
-    wrong_bank: 'Payment was not made to the correct Coopvest bank account.',
-  };
-
-  const rejectionDetail = rejectionCategory && categoryMessages[rejectionCategory]
-    ? categoryMessages[rejectionCategory]
-    : rejectionReason;
-
-  const title = 'Payment Proof Rejected';
-  const body = `We could not verify the ${paymentTypeLabel} of ₦${Number(amount).toLocaleString()} you submitted.${rejectionDetail ? ` Reason: ${rejectionDetail}` : ''} Please check your transaction details or upload a clearer proof of payment. If you believe this is an error, kindly contact support.`;
-
-  const type = 'payment_proof_rejected';
-  const data = {
-    paymentType,
-    amount: String(amount),
-    rejectionReason: rejectionReason || '',
-    rejectionCategory: rejectionCategory || '',
-    transactionReference: transactionReference || '',
-  };
-
-  await Promise.all([
-    sendInApp({ profileId, title, body, type, priority: 'high' }),
-    pushToProfile({ profileId, title, body, type, data }),
-  ]);
-
-  logger.info(`Payment proof rejected notification sent to ${profileId}`);
-}
-
-/**
- * Notify member that additional information is required for their payment proof.
- */
-async function notifyPaymentProofInfoRequested({
-  profileId,
-  message,
-  paymentProofId,
-}) {
-  const title = 'Additional Information Required';
-  const body = `Our team needs additional information to verify your payment. Please check the details below and respond accordingly:\n\n${message}`;
-  
-  const type = 'payment_proof_info_requested';
-  const data = {
-    paymentProofId: paymentProofId || '',
-  };
-
-  await Promise.all([
-    sendInApp({ profileId, title, body, type, priority: 'high' }),
-    pushToProfile({ profileId, title, body, type, data }),
-  ]);
-
-  logger.info(`Payment proof info request notification sent to ${profileId}`);
-}
-
-/**
- * Notify member that their payment proof has been submitted successfully.
- */
-async function notifyPaymentProofSubmitted({
-  profileId,
-  amount,
-  paymentType,
-  transactionReference,
-}) {
-  const paymentTypeLabel = {
-    monthly_contribution: 'Monthly Contribution',
-    loan_repayment: 'Loan Repayment',
-    registration_fee: 'Registration Fee',
-    investment: 'Investment',
-    other: 'Payment',
-  }[paymentType] || 'Payment';
-
-  const title = 'Payment Proof Received';
-  const body = `Thank you! Your ${paymentTypeLabel} proof of ₦${Number(amount).toLocaleString()} has been submitted successfully and is awaiting verification by the Coopvest Africa team.${transactionReference ? ` Reference: ${transactionReference}` : ''} You will receive a notification once it has been reviewed.`;
-
-  const type = 'payment_proof_submitted';
-  const data = {
-    paymentType,
-    amount: String(amount),
-    transactionReference: transactionReference || '',
-  };
-
-  await Promise.all([
-    sendInApp({ profileId, title, body, type, priority: 'normal' }),
-    pushToProfile({ profileId, title, body, type, data }),
-  ]);
-}
-
 // ── Broadcast (fan-out) ───────────────────────────────────────────────────────
 
 /**
@@ -604,6 +455,101 @@ async function broadcast({ profileIds, channels = ['in_app'], title, body, subje
   return results;
 }
 
+// ── Payment Proof Notifications ─────────────────────────────────────────────
+
+const PAYMENT_TYPE_LABELS = {
+  monthly_contribution: 'Monthly Contribution',
+  loan_repayment: 'Loan Repayment',
+  registration_fee: 'Registration Fee',
+  investment: 'Investment',
+  other: 'Payment',
+};
+
+/**
+ * Notify member that their payment proof has been submitted successfully.
+ */
+async function notifyPaymentProofSubmitted({ profileId, amount, paymentType, transactionReference }) {
+  const label = PAYMENT_TYPE_LABELS[paymentType] || 'Payment';
+  const title = 'Payment Proof Received';
+  const body = `Thank you! Your ${label} proof of ₦${Number(amount).toLocaleString()} has been submitted successfully and is awaiting verification by the Coopvest Africa team.${transactionReference ? ` Reference: ${transactionReference}` : ''} You will receive a notification once it has been reviewed.`;
+
+  const type = 'payment_proof_submitted';
+  const data = { paymentType, amount: String(amount), transactionReference: transactionReference || '' };
+
+  await Promise.all([
+    sendInApp({ profileId, title, body, type, priority: 'normal' }),
+    pushToProfile({ profileId, title, body, type, data }),
+  ]);
+  logger.info(`Payment proof submitted notification sent to ${profileId}`);
+}
+
+/**
+ * Notify member that their payment proof has been approved and credited.
+ */
+async function notifyPaymentProofApproved({ profileId, amount, paymentType, receiptNumber, transactionReference }) {
+  const label = PAYMENT_TYPE_LABELS[paymentType] || 'Payment';
+  const title = 'Payment Verified! 🎉';
+  const body = `Your ${label} of ₦${Number(amount).toLocaleString()} has been verified and successfully credited to your Coopvest Africa account.${receiptNumber ? ` Receipt: ${receiptNumber}` : ''} Thank you.`;
+
+  const type = 'payment_proof_approved';
+  const data = { paymentType, amount: String(amount), receiptNumber: receiptNumber || '', transactionReference: transactionReference || '' };
+
+  await Promise.all([
+    sendInApp({ profileId, title, body, type, priority: 'high' }),
+    pushToProfile({ profileId, title, body, type, data }),
+  ]);
+  logger.info(`Payment proof approved notification sent to ${profileId}`);
+}
+
+/**
+ * Notify member that their payment proof has been rejected.
+ */
+async function notifyPaymentProofRejected({ profileId, amount, paymentType, rejectionReason, rejectionCategory, transactionReference }) {
+  const label = PAYMENT_TYPE_LABELS[paymentType] || 'Payment';
+
+  const categoryMessages = {
+    blurry_receipt: 'The uploaded receipt is blurry and cannot be verified.',
+    invalid_reference: 'The transaction reference provided is invalid or cannot be verified.',
+    amount_mismatch: 'The amount entered does not match the transaction record.',
+    payment_not_found: 'We could not locate this payment in our records.',
+    duplicate_submission: 'A payment proof for this transaction has already been submitted.',
+    wrong_bank: 'Payment was not made to the correct Coopvest bank account.',
+  };
+
+  const rejectionDetail = rejectionCategory && categoryMessages[rejectionCategory]
+    ? categoryMessages[rejectionCategory]
+    : rejectionReason;
+
+  const title = 'Payment Proof Rejected';
+  const body = `We could not verify the ${label} of ₦${Number(amount).toLocaleString()} you submitted.${rejectionDetail ? ` Reason: ${rejectionDetail}` : ''} Please check your transaction details or upload a clearer proof of payment. If you believe this is an error, kindly contact support.`;
+
+  const type = 'payment_proof_rejected';
+  const data = { paymentType, amount: String(amount), rejectionReason: rejectionReason || '', rejectionCategory: rejectionCategory || '', transactionReference: transactionReference || '' };
+
+  await Promise.all([
+    sendInApp({ profileId, title, body, type, priority: 'high' }),
+    pushToProfile({ profileId, title, body, type, data }),
+  ]);
+  logger.info(`Payment proof rejected notification sent to ${profileId}`);
+}
+
+/**
+ * Notify member that additional information is required for their payment proof.
+ */
+async function notifyPaymentProofInfoRequested({ profileId, message, paymentProofId }) {
+  const title = 'Additional Information Required';
+  const body = `Our team needs additional information to verify your payment. Please check the details below and respond accordingly:\n\n${message}`;
+
+  const type = 'payment_proof_info_requested';
+  const data = { paymentProofId: paymentProofId || '' };
+
+  await Promise.all([
+    sendInApp({ profileId, title, body, type, priority: 'high' }),
+    pushToProfile({ profileId, title, body, type, data }),
+  ]);
+  logger.info(`Payment proof info request notification sent to ${profileId}`);
+}
+
 module.exports = {
   sendInApp,
   sendEmail,
@@ -621,9 +567,9 @@ module.exports = {
   notifyRolloverApproved,
   notifyRolloverRejected,
   notifyRolloverGuarantorReplaced,
-  // Payment Proof
+  // Payment proofs
+  notifyPaymentProofSubmitted,
   notifyPaymentProofApproved,
   notifyPaymentProofRejected,
   notifyPaymentProofInfoRequested,
-  notifyPaymentProofSubmitted,
 };

@@ -1,9 +1,8 @@
 /**
- * Cross-backend Admin API (service-token auth)
+ * Cross-backend Admin API (Supabase JWT auth)
  *
- * These endpoints are consumed by the Admin Dashboard's own API server, not
- * by a Supabase-authenticated member. They trust a shared secret header
- * (`X-Service-Token`) validated by the `requireService` middleware.
+ * These endpoints are consumed by the Admin Dashboard frontend.
+ * They authenticate using the Supabase JWT token from the logged-in admin.
  *
  * Responses are intentionally flat and stable so the admin HTTP client
  * can consume them without reshaping.
@@ -14,11 +13,12 @@ const { body, param } = require('express-validator');
 const router = express.Router();
 
 const supabase = require('../config/supabase');
-const { requireService } = require('../middleware/auth');
+const { requireAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
 
-router.use(requireService);
+// Apply requireAdmin to ALL routes in this router since they all require authentication
+router.use(requireAdmin);
 
 function paging(req) {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -55,11 +55,113 @@ router.get('/members', async (req, res) => {
     if (req.query.role) q = q.eq('role', req.query.role);
     if (req.query.isFlagged === 'true') q = q.eq('is_flagged', true);
     if (req.query.isActive === 'false') q = q.eq('is_active', false);
+    // Support status filter for admin dashboard
+    if (req.query.status === 'active') q = q.eq('is_active', true).eq('kyc_verified', true).eq('is_flagged', false);
+    if (req.query.status === 'suspended') q = q.eq('is_flagged', true);
+    if (req.query.status === 'pending') q = q.eq('is_active', true).eq('kyc_verified', false).eq('is_flagged', false);
+    if (req.query.status === 'inactive') q = q.eq('is_active', false);
     const { data, error, count } = await q;
     if (error) throw error;
-    res.json({ success: true, members: data || [], pagination: { page, limit, total: count || 0 } });
+
+    // Map raw profiles to Member interface expected by Admin Dashboard frontend
+    const members = (data || []).map((p) => {
+      const nameParts = (p.name || '').split(' ').filter(Boolean);
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      const status = p.is_flagged
+        ? 'suspended'
+        : p.is_active
+          ? (p.kyc_verified ? 'active' : 'pending')
+          : 'inactive';
+      return {
+        ...p,
+        memberId: p.user_id || p.id,
+        firstName,
+        lastName,
+        status,
+        joinDate: p.created_at,
+        totalContributions: 0,
+        activeLoan: 0,
+        riskScore: 0,
+        avatarInitials: (firstName[0] || '') + (lastName[0] || ''),
+      };
+    });
+
+    // Return data in format expected by Admin Dashboard frontend
+    res.json({ 
+      success: true,
+      data: members, 
+      total: count || 0, 
+      page, 
+      limit 
+    });
   } catch (err) {
     logger.error('admin members list error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/members/stats
+ * Get member statistics for the Admin Dashboard
+ */
+router.get('/members/stats', async (req, res) => {
+  try {
+    const [
+      { count: total },
+      { count: active },
+      { count: inactive },
+      { count: suspended },
+      { count: pending },
+      { count: newThisMonth },
+      { count: loanDefaulters },
+      { count: highRisk },
+    ] = await Promise.all([
+      supabase.from('profiles').select('id', { count: 'exact', head: true }),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_active', true).eq('kyc_verified', true).eq('is_flagged', false),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_active', false),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_flagged', true),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_active', true).eq('kyc_verified', false).eq('is_flagged', false),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
+      supabase.from('loans').select('id', { count: 'exact', head: true }).eq('status', 'active').lt('remaining_balance', 0),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_flagged', true),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        total: total || 0,
+        active: active || 0,
+        inactive: inactive || 0,
+        suspended: suspended || 0,
+        pending: pending || 0,
+        newThisMonth: newThisMonth || 0,
+        loanDefaulters: loanDefaulters || 0,
+        highRisk: highRisk || 0,
+      }
+    });
+  } catch (err) {
+    logger.error('admin members stats error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/members/:id/transactions
+ */
+router.get('/members/:id/transactions', async (req, res) => {
+  try {
+    const { page, limit, from, to } = paging(req);
+    const { data, error, count } = await supabase
+      .from('transactions')
+      .select('*', { count: 'exact' })
+      .eq('profile_id', req.params.id)
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    if (error) throw error;
+    res.json({ success: true, data: data || [], transactions: data || [], pagination: { page, limit, total: count || 0 } });
+  } catch (err) {
+    logger.error('admin member transactions error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -77,22 +179,45 @@ router.get('/members/:id', async (req, res) => {
     if (error) throw error;
     if (!profile) return res.status(404).json({ success: false, error: 'Member not found' });
 
-    const [wallet, savings, kyc, loans, tickets] = await Promise.all([
+    const [wallet, savings, kyc, loans, tickets, bankAccounts, kycDocuments] = await Promise.all([
       supabase.from('wallets').select('*').eq('profile_id', profile.id).maybeSingle(),
       supabase.from('savings').select('*').eq('profile_id', profile.id).maybeSingle(),
       supabase.from('kyc').select('*').eq('profile_id', profile.id).maybeSingle(),
       supabase.from('loans').select('*').eq('profile_id', profile.id).order('created_at', { ascending: false }),
       supabase.from('tickets').select('*').eq('profile_id', profile.id).order('created_at', { ascending: false }),
+      supabase.from('bank_accounts').select('*').eq('profile_id', profile.id).order('created_at', { ascending: false }),
+      supabase.from('kyc_documents').select('*').eq('profile_id', profile.id).order('created_at', { ascending: false }),
     ]);
+
+    const kycData = kyc.data || null;
+
     res.json({
       success: true,
       member: {
         ...profile,
+        // Flatten KYC identity fields to top-level for easy access in the frontend
+        bvn: profile.bvn || kycData?.bvn || null,
+        nin: profile.nin || kycData?.nin || null,
+        id_type: profile.id_type || kycData?.id_type || null,
+        id_number: profile.id_number || kycData?.id_number || null,
+        selfie_url: profile.selfie_url || kycData?.selfie_url || kycData?.selfie || null,
+        id_document_url: profile.id_document_url || kycData?.id_document_url || null,
+        kyc_status: profile.kyc_status || kycData?.status || null,
+        // Employment / registration fields from KYC
+        employer_name: profile.employer || profile.employer_name || kycData?.employer_name || null,
+        employment_type: profile.employment_type || kycData?.employment_type || null,
+        employer_staff_id: profile.staff_id || kycData?.employer_staff_id || null,
+        work_address: profile.work_address || kycData?.work_address || null,
+        // Registration form data (stored as JSONB in kyc.personal_info)
+        registration: kycData?.personal_info || null,
+        // Nested objects
         wallet: wallet.data || null,
         savings: savings.data || null,
-        kyc: kyc.data || null,
+        kyc: kycData,
         loans: loans.data || [],
         tickets: tickets.data || [],
+        bank_accounts: bankAccounts.data || [],
+        documents: kycDocuments.data || [],
       },
     });
   } catch (err) {
@@ -145,15 +270,17 @@ router.get('/loans', async (req, res) => {
     const { page, limit, from, to } = paging(req);
     let q = supabase
       .from('loans')
-      .select('*, profile:profiles(id, user_id, name, email)', { count: 'exact' })
+      .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(from, to);
     if (req.query.status) q = q.eq('status', req.query.status);
     if (req.query.loanType) q = q.eq('loan_type', req.query.loanType);
     if (req.query.profileId) q = q.eq('profile_id', req.query.profileId);
+    else if (req.query.memberId) q = q.eq('profile_id', req.query.memberId);
     const { data, error, count } = await q;
     if (error) throw error;
-    res.json({ success: true, loans: data || [], pagination: { page, limit, total: count || 0 } });
+    const loansArr = data || [];
+    res.json({ success: true, data: loansArr, loans: loansArr, pagination: { page, limit, total: count || 0 } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -336,6 +463,366 @@ router.get('/notifications', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/admin/loans/portfolio-summary
+ * Returns loan portfolio summary for dashboard
+ */
+router.get('/loans/portfolio-summary', async (req, res) => {
+  try {
+    const { data: loans, error } = await supabase
+      .from('loans')
+      .select('status, amount, created_at, next_due_date');
+
+    if (error) throw error;
+
+    const loansData = loans || [];
+    const now = new Date();
+    
+    const summary = {
+      totalLoans: loansData.length,
+      activeLoans: loansData.filter(l => ['active', 'approved'].includes(l.status)).length,
+      completedLoans: loansData.filter(l => l.status === 'completed').length,
+      defaultedLoans: loansData.filter(l => 
+        l.status === 'active' && l.next_due_date && new Date(l.next_due_date) < now
+      ).length,
+      totalAmount: loansData.reduce((sum, l) => sum + Number(l.amount || 0), 0),
+      activeAmount: loansData.filter(l => ['active', 'approved'].includes(l.status))
+        .reduce((sum, l) => sum + Number(l.amount || 0), 0)
+    };
+
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/contributions/summary
+ * Returns contribution summary for dashboard
+ */
+router.get('/contributions/summary', async (req, res) => {
+  try {
+    const { data: savings, error: savingsError } = await supabase
+      .from('savings')
+      .select('total_saved, monthly_savings');
+
+    const { data: transactions, error: txError } = await supabase
+      .from('transactions')
+      .select('amount, type, status, created_at')
+      .in('type', ['deposit', 'savings_deposit', 'transfer_in'])
+      .eq('status', 'completed');
+
+    if (savingsError) throw savingsError;
+
+    const savingsData = savings || [];
+    const txData = transactions || [];
+
+    // Get this month's transactions
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const thisMonthTx = txData.filter(t => new Date(t.created_at) >= monthStart);
+
+    const summary = {
+      totalMembers: savingsData.length,
+      totalSaved: savingsData.reduce((sum, s) => sum + Number(s.total_saved || 0), 0),
+      monthlySavings: savingsData.reduce((sum, s) => sum + Number(s.monthly_savings || 0), 0),
+      monthlyContributions: thisMonthTx.reduce((sum, t) => sum + Number(t.amount || 0), 0),
+      transactionCount: txData.length
+    };
+
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/investments/portfolio
+ * Returns investment portfolio summary
+ */
+router.get('/investments/portfolio', async (req, res) => {
+  try {
+    const { data: pools, error: poolsError } = await supabase
+      .from('investment_pools')
+      .select('*');
+
+    const { data: participations, error: partError } = await supabase
+      .from('investment_participations')
+      .select('*');
+
+    if (poolsError) throw poolsError;
+
+    const poolsData = pools || [];
+    const partsData = participations || [];
+
+    const summary = {
+      totalPools: poolsData.length,
+      activePools: poolsData.filter(p => p.status === 'active').length,
+      totalInvested: partsData.reduce((sum, p) => sum + Number(p.amount || 0), 0),
+      totalParticipants: partsData.length,
+      pools: poolsData
+    };
+
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/compliance/summary
+ * Returns compliance summary
+ */
+router.get('/compliance/summary', async (req, res) => {
+  try {
+    const [
+      totalMembers,
+      kycVerified,
+      kycPending,
+      kycRejected
+    ] = await Promise.all([
+      supabase.from('profiles').select('id', { count: 'exact', head: true }),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('kyc_verified', true),
+      supabase.from('profiles').select('id', { count: 'exact', head: true })
+        .eq('kyc_verified', false).eq('is_active', true),
+      supabase.from('kyc_documents').select('id', { count: 'exact', head: true }).eq('status', 'rejected')
+    ]);
+
+    const summary = {
+      totalMembers: totalMembers.count || 0,
+      kycVerified: kycVerified.count || 0,
+      kycPending: kycPending.count || 0,
+      kycRejected: kycRejected.count || 0,
+      complianceRate: totalMembers.count > 0 
+        ? Math.round((kycVerified.count / totalMembers.count) * 10000) / 100 
+        : 0
+    };
+
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/support
+ * Returns support tickets summary
+ */
+router.get('/support', async (req, res) => {
+  try {
+    const { page, limit, from, to } = paging(req);
+    const status = req.query.status;
+    
+    let query = supabase
+      .from('tickets')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    
+    if (status) query = query.eq('status', status);
+    
+    const { data, error, count } = await query;
+    if (error) throw error;
+
+    res.json({ 
+      success: true, 
+      data: data || [],
+      pagination: { page, limit, total: count || 0 } 
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/interest-rates
+ * Returns interest rates configuration
+ */
+router.get('/interest-rates', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('system_settings')
+      .select('*')
+      .like('key', '%interest_rate%');
+
+    if (error) throw error;
+
+    // Return default rates if not configured
+    const rates = (data || []).reduce((acc, s) => {
+      acc[s.key] = s.value;
+      return acc;
+    }, {
+      savings_interest_rate: '5.0',
+      loan_interest_rate: '10.0',
+      investment_return_rate: '8.0'
+    });
+
+    res.json({ success: true, data: rates });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/analytics/repayment-trend
+ * Returns monthly repayment rate trend
+ */
+router.get('/analytics/repayment-trend', async (req, res) => {
+  try {
+    const months = parseInt(req.query.months, 10) || 6;
+    const trend = [];
+    
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      const monthStart = new Date(d.getFullYear(), d.getMonth(), 1);
+      const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      
+      // Get all loans that were active during this month
+      const { data: loans } = await supabase
+        .from('loans')
+        .select('status, maturity_date, disbursed_at')
+        .lte('disbursed_at', monthEnd.toISOString());
+
+      const loansData = loans || [];
+      const activeLoans = loansData.filter(l => 
+        ['active', 'disbursed'].includes(l.status) || 
+        (l.maturity_date && new Date(l.maturity_date) < monthEnd)
+      );
+      
+      const defaultedLoans = activeLoans.filter(l => 
+        l.maturity_date && new Date(l.maturity_date) < monthEnd
+      );
+      
+      const repaymentRate = activeLoans.length > 0 
+        ? Math.round((activeLoans.length - defaultedLoans.length) / activeLoans.length * 10000) / 100 
+        : 100;
+
+      trend.push({
+        month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        rate: repaymentRate,
+        active: activeLoans.length,
+        defaulted: defaultedLoans.length
+      });
+    }
+
+    res.json({ success: true, data: trend });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/analytics/risk-exposure
+ * Returns risk exposure metrics
+ */
+router.get('/analytics/risk-exposure', async (req, res) => {
+  try {
+    const { data: loans } = await supabase
+      .from('loans')
+      .select('status, amount, maturity_date, disbursed_at');
+
+    const loansData = loans || [];
+    const now = new Date();
+    const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+
+    const activeLoans = loansData.filter(l => ['active', 'disbursed'].includes(l.status));
+    const defaultedLoans = activeLoans.filter(l => 
+      l.maturity_date && new Date(l.maturity_date) < now
+    );
+    const atRisk30 = activeLoans.filter(l =>
+      l.maturity_date && 
+      new Date(l.maturity_date) >= now && 
+      new Date(l.maturity_date) <= thirtyDaysFromNow
+    );
+    const atRisk90 = activeLoans.filter(l =>
+      l.maturity_date && 
+      new Date(l.maturity_date) > thirtyDaysFromNow && 
+      new Date(l.maturity_date) <= ninetyDaysFromNow
+    );
+
+    const totalExposure = activeLoans.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const defaultedAmount = defaultedLoans.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const atRisk30Amount = atRisk30.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const atRisk90Amount = atRisk90.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+
+    res.json({ 
+      success: true, 
+      data: {
+        totalExposure,
+        defaultedAmount,
+        defaultedCount: defaultedLoans.length,
+        atRisk30Amount,
+        atRisk30Count: atRisk30.length,
+        atRisk90Amount,
+        atRisk90Count: atRisk90.length,
+        riskPercentage: totalExposure > 0 ? Math.round((defaultedAmount / totalExposure) * 10000) / 100 : 0
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/analytics/defaulter-trend
+ * Returns monthly defaulter trend
+ */
+router.get('/analytics/defaulter-trend', async (req, res) => {
+  try {
+    const months = parseInt(req.query.months, 10) || 6;
+    const trend = [];
+    
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      
+      const { data: loans } = await supabase
+        .from('loans')
+        .select('status, maturity_date')
+        .in('status', ['active', 'disbursed']);
+
+      const loansData = loans || [];
+      const defaultedLoans = loansData.filter(l => 
+        l.maturity_date && new Date(l.maturity_date) < monthEnd
+      );
+
+      trend.push({
+        month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        count: defaultedLoans.length,
+        percentage: loansData.length > 0 
+          ? Math.round((defaultedLoans.length / loansData.length) * 10000) / 100 
+          : 0
+      });
+    }
+
+    res.json({ success: true, data: trend });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/login-history/log
+ */
+router.get('/login-history/log', async (req, res) => {
+  try {
+    const { page, limit, from, to } = paging(req);
+    const { data, error, count } = await supabase
+      .from('audit_logs')
+      .select('*, profile:profiles(id, user_id, name, email)', { count: 'exact' })
+      .eq('action', 'LOGIN')
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    
+    if (error) throw error;
+    res.json({ success: true, data: data || [], pagination: { page, limit, total: count || 0 } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/v1/admin/notifications/broadcast
  */
 router.post(
@@ -401,6 +888,321 @@ router.get('/overview', async (req, res) => {
       },
     });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Dashboard endpoints for Admin Dashboard
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/v1/admin/dashboard/summary
+ * Returns summary metrics for the admin dashboard
+ */
+router.get('/dashboard/summary', async (req, res) => {
+  try {
+    // Get all the counts we need
+    const [
+      totalMembers,
+      activeMembers,
+      kycPending,
+      totalLoans,
+      activeLoans,
+      defaulters,
+      totalSavings,
+      monthlyContributions,
+      totalInvestments,
+      openTickets
+    ] = await Promise.all([
+      // Total members
+      supabase.from('profiles').select('id', { count: 'exact', head: true }),
+      // Active members (verified KYC, not flagged)
+      supabase.from('profiles').select('id', { count: 'exact', head: true })
+        .eq('is_active', true).eq('is_flagged', false),
+      // KYC pending
+      supabase.from('profiles').select('id', { count: 'exact', head: true })
+        .eq('is_active', true).eq('kyc_verified', false),
+      // Total loans
+      supabase.from('loans').select('id, status, amount, disbursed_at, maturity_date'),
+      // Active loans (approved/disbursed, not completed/repaid)
+      supabase.from('loans').select('id, status, amount', { count: 'exact', head: true })
+        .in('status', ['approved', 'disbursed', 'active']),
+      // Defaulters (loans past due date)
+      supabase.from('loans').select('id', { count: 'exact', head: true })
+        .in('status', ['active', 'disbursed'])
+        .lt('maturity_date', new Date().toISOString()),
+      // Total savings (from savings table)
+      supabase.from('savings').select('total_saved'),
+      // This month's contributions (from transactions)
+      supabase.from('transactions').select('amount')
+        .in('type', ['deposit', 'savings_deposit', 'transfer_in'])
+        .eq('status', 'completed')
+        .gte('created_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
+      // Total investments
+      supabase.from('investment_participations').select('amount', { count: 'exact' }),
+      // Open tickets
+      supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('status', 'open')
+    ]);
+
+    const loansData = totalLoans.data || [];
+    const disbursedLoans = loansData.filter(l => ['disbursed', 'active', 'approved'].includes(l.status));
+    const disbursedAmount = disbursedLoans.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const completedLoans = loansData.filter(l => l.status === 'completed');
+    const completedAmount = completedLoans.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+
+    // Calculate repayment rate (completed loans / total disbursed loans)
+    const repaymentRate = disbursedLoans.length > 0 
+      ? ((disbursedLoans.length - defaulters.count) / disbursedLoans.length * 100) 
+      : 0;
+
+    // Calculate monthly growth (compare this month vs last month)
+    const lastMonthStart = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
+    const lastMonthEnd = new Date(new Date().getFullYear(), new Date().getMonth(), 0);
+    const { data: lastMonthContributions } = await supabase.from('transactions')
+      .select('amount')
+      .in('type', ['deposit', 'savings_deposit', 'transfer_in'])
+      .eq('status', 'completed')
+      .gte('created_at', lastMonthStart.toISOString())
+      .lte('created_at', lastMonthEnd.toISOString());
+    
+    const lastMonthTotal = (lastMonthContributions || []).reduce((sum, c) => sum + Number(c.amount || 0), 0);
+    const thisMonthTotal = (monthlyContributions.data || []).reduce((sum, c) => sum + Number(c.amount || 0), 0);
+    const monthlyGrowth = lastMonthTotal > 0 ? ((thisMonthTotal - lastMonthTotal) / lastMonthTotal * 100) : (thisMonthTotal > 0 ? 100 : 0);
+
+    // Total savings sum (from savings table)
+    const savingsData = totalSavings.data || [];
+    const totalContribSum = savingsData.reduce((sum, s) => sum + Number(s.total_saved || 0), 0);
+
+    // Investments sum
+    const investmentsData = totalInvestments.data || [];
+    const totalInvestSum = investmentsData.reduce((sum, i) => sum + Number(i.amount || 0), 0);
+
+    res.json({
+      success: true,
+      data: {
+        totalSavingsVolume: totalContribSum,
+        totalLoansIssued: disbursedAmount,
+        activeMembers: activeMembers.count || 0,
+        totalMembers: totalMembers.count || 0,
+        repaymentRate: Math.round(repaymentRate * 10) / 10,
+        monthlyGrowth: Math.round(monthlyGrowth * 10) / 10,
+        riskExposure: defaulters.count || 0,
+        activeDefaulters: defaulters.count || 0,
+        monthlySavingsVolume: thisMonthTotal,
+        totalInvestments: totalInvestSum,
+        pendingKYC: kycPending.count || 0,
+        openTickets: openTickets.count || 0,
+        loans: {
+          total: loansData.length,
+          disbursed: disbursedLoans.length,
+          disbursedAmount,
+          completed: completedLoans.length,
+          completedAmount,
+          active: activeLoans.count || 0,
+          defaulters: defaulters.count || 0
+        }
+      }
+    });
+  } catch (err) {
+    logger.error('dashboard summary error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/dashboard/recent-activity
+ * Returns recent activity for the admin dashboard
+ */
+router.get('/dashboard/recent-activity', async (req, res) => {
+  try {
+    const limit = Math.min(50, parseInt(req.query.limit, 10) || 10);
+
+    // Get recent transactions
+    const { data: transactions } = await supabase
+      .from('transactions')
+      .select('*, profile:profiles(id, user_id, name, email)')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    // Get recent member registrations
+    const { data: recentMembers } = await supabase
+      .from('profiles')
+      .select('id, user_id, name, email, created_at')
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    // Get recent loans
+    const { data: recentLoans } = await supabase
+      .from('loans')
+      .select('id, amount, status, created_at, profile:profiles(id, user_id, name, email)')
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    // Combine and sort activities
+    const activities = [];
+
+    // Add transactions as activities
+    (transactions || []).forEach(t => {
+      activities.push({
+        id: t.id,
+        type: 'transaction',
+        action: t.type || t.transaction_type,
+        amount: t.amount,
+        status: t.status,
+        user: t.profile?.name || t.profile?.email,
+        created_at: t.created_at
+      });
+    });
+
+    // Add recent registrations
+    (recentMembers || []).forEach(m => {
+      activities.push({
+        id: m.id,
+        type: 'member',
+        action: 'registered',
+        user: m.name || m.email,
+        created_at: m.created_at
+      });
+    });
+
+    // Add recent loans
+    (recentLoans || []).forEach(l => {
+      activities.push({
+        id: l.id,
+        type: 'loan',
+        action: l.status,
+        amount: l.amount,
+        user: l.profile?.name || l.profile?.email,
+        created_at: l.created_at
+      });
+    });
+
+    // Sort by date and limit
+    activities.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const finalActivities = activities.slice(0, limit);
+
+    res.json({
+      success: true,
+      data: finalActivities
+    });
+  } catch (err) {
+    logger.error('dashboard recent activity error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/contributions/monthly
+ * Returns monthly contribution data for charts
+ */
+router.get('/contributions/monthly', async (req, res) => {
+  try {
+    const months = parseInt(req.query.months, 10) || 6;
+    const startDate = new Date();
+    startDate.setMonth(startDate.getMonth() - months);
+    startDate.setDate(1);
+
+    // Get contributions from transactions table (deposits/savings)
+    const { data: transactions, error } = await supabase
+      .from('transactions')
+      .select('amount, created_at')
+      .in('type', ['deposit', 'savings_deposit', 'transfer_in'])
+      .eq('status', 'completed')
+      .gte('created_at', startDate.toISOString())
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    // Group by month
+    const monthlyData = {};
+    const now = new Date();
+    
+    // Initialize months with 0
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setMonth(d.getMonth() - i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      monthlyData[key] = { month: key, amount: 0, count: 0 };
+    }
+
+    // Sum contributions by month
+    (transactions || []).forEach(t => {
+      const d = new Date(t.created_at);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (monthlyData[key]) {
+        monthlyData[key].amount += Number(t.amount || 0);
+        monthlyData[key].count += 1;
+      }
+    });
+
+    const result = Object.values(monthlyData).map(m => ({
+      month: m.month,
+      amount: Math.round(m.amount * 100) / 100,
+      count: m.count
+    }));
+
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (err) {
+    logger.error('monthly contributions error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/loans/status-breakdown
+ * Returns loan status breakdown
+ */
+router.get('/loans/status-breakdown', async (req, res) => {
+  try {
+    const { data: loans, error } = await supabase
+      .from('loans')
+      .select('status, amount');
+
+    if (error) throw error;
+
+    const breakdown = {
+      pending: { count: 0, amount: 0 },
+      approved: { count: 0, amount: 0 },
+      disbursed: { count: 0, amount: 0 },
+      active: { count: 0, amount: 0 },
+      completed: { count: 0, amount: 0 },
+      defaulted: { count: 0, amount: 0 },
+      rejected: { count: 0, amount: 0 }
+    };
+
+    const now = new Date();
+
+    (loans || []).forEach(l => {
+      let status = l.status;
+      
+      // Check for default
+      if (['active', 'disbursed'].includes(l.status) && l.maturity_date && new Date(l.maturity_date) < now) {
+        status = 'defaulted';
+      }
+
+      if (breakdown[status]) {
+        breakdown[status].count += 1;
+        breakdown[status].amount += Number(l.amount || 0);
+      }
+    });
+
+    // Format response
+    const result = Object.entries(breakdown).map(([status, data]) => ({
+      status,
+      count: data.count,
+      amount: Math.round(data.amount * 100) / 100
+    }));
+
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (err) {
+    logger.error('loans status breakdown error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });

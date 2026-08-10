@@ -1,6 +1,6 @@
 {
     "name": "coopvest-referral-api",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Coopvest Africa Referral System Backend API - Secure Cooperative Financial Services Platform",
     "main": "src/server.js",
     "scripts": {

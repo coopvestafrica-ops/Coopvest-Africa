@@ -294,40 +294,40 @@ BEGIN
     SELECT * INTO member_record
     FROM public.profiles
     WHERE id = NEW.profile_id;
-    
+
     -- Generate receipt number
     receipt_num := public.generate_receipt_number();
-    
-    -- Create contribution record for monthly_contribution type
+
+    -- Create contribution record + credit savings (monthly_contribution only).
+    -- Wrapped per-statement so a schema mismatch on `contributions`/`savings`
+    -- never blocks the approval or the receipt below.
     IF NEW.payment_type = 'monthly_contribution' THEN
-      INSERT INTO public.contributions (
-        profile_id,
-        amount,
-        status,
-        contribution_month,
-        payment_proof_id,
-        notes
-      ) VALUES (
-        NEW.profile_id,
-        NEW.amount,
-        'successful',
-        TO_CHAR(NEW.payment_date, 'YYYY-MM'),
-        NEW.id,
-        'Auto-created from payment proof verification'
-      ) RETURNING id INTO new_contribution_id;
-      
-      -- Update savings balance
-      UPDATE public.savings
-      SET 
-        total_saved = total_saved + NEW.amount,
-        last_savings_date = NOW()
-      WHERE profile_id = NEW.profile_id;
-      
-      -- Update payment_proofs with contribution_id
-      NEW.contribution_id := new_contribution_id;
+      BEGIN
+        INSERT INTO public.contributions (
+          profile_id, amount, status, contribution_month, payment_proof_id, notes
+        ) VALUES (
+          NEW.profile_id, NEW.amount, 'successful',
+          TO_CHAR(NEW.payment_date, 'YYYY-MM'),
+          NEW.id, 'Auto-created from payment proof verification'
+        ) RETURNING id INTO new_contribution_id;
+
+        NEW.contribution_id := new_contribution_id;
+      EXCEPTION WHEN OTHERS THEN
+        new_contribution_id := NULL;
+      END;
+
+      BEGIN
+        UPDATE public.savings
+        SET total_saved = total_saved + NEW.amount,
+            last_savings_date = NOW()
+        WHERE profile_id = NEW.profile_id;
+      EXCEPTION WHEN OTHERS THEN
+        NULL;
+      END;
     END IF;
-    
-    -- Create digital receipt
+
+    -- Create digital receipt (the primary output of approval).
+    -- Kept OUTSIDE exception swallowing so a real failure surfaces.
     INSERT INTO public.digital_receipts (
       receipt_number,
       receipt_id,
@@ -365,33 +365,31 @@ BEGIN
       NEW.approved_at,
       'Coopvest Africa'
     );
-    
-    -- Create transaction record for wallet top-up
+
+    -- Create transaction record for wallet top-up (best-effort).
     IF NEW.payment_type IN ('monthly_contribution', 'investment', 'other') THEN
-      INSERT INTO public.transactions (
-        profile_id,
-        type,
-        category,
-        amount,
-        description,
-        reference,
-        status
-      ) VALUES (
-        NEW.profile_id,
-        'credit',
-        'payment_proof',
-        NEW.amount,
-        CASE NEW.payment_type
-          WHEN 'monthly_contribution' THEN 'Monthly Contribution via Payment Proof'
-          WHEN 'investment' THEN 'Investment via Payment Proof'
-          ELSE 'Payment via Proof'
-        END,
-        NEW.transaction_reference,
-        'successful'
-      );
+      BEGIN
+        INSERT INTO public.transactions (
+          profile_id, type, category, amount, description, reference, status
+        ) VALUES (
+          NEW.profile_id,
+          'credit',
+          'payment_proof',
+          NEW.amount,
+          CASE NEW.payment_type
+            WHEN 'monthly_contribution' THEN 'Monthly Contribution via Payment Proof'
+            WHEN 'investment' THEN 'Investment via Payment Proof'
+            ELSE 'Payment via Proof'
+          END,
+          NEW.transaction_reference,
+          'successful'
+        );
+      EXCEPTION WHEN OTHERS THEN
+        NULL;
+      END;
     END IF;
   END IF;
-  
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

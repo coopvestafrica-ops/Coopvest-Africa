@@ -17,6 +17,7 @@ const supabase = require('../config/supabase');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
+const notifyService = require('../services/notifyService');
 
 router.use(authenticate);
 
@@ -65,7 +66,7 @@ router.post(
           .select('id, status')
           .eq('profile_id', req.user.id)
           .eq('transaction_reference', transaction_reference)
-          .eq('deleted_at', null)
+          .is('deleted_at', null)
           .maybeSingle();
 
         if (existing) {
@@ -119,6 +120,16 @@ router.post(
       });
 
       logger.info(`Payment proof submitted by user ${req.user.id}: ${proof.id}`);
+
+      // Notify member their submission was received (fire-and-forget)
+      notifyService
+        .notifyPaymentProofSubmitted({
+          profileId: req.user.id,
+          amount,
+          paymentType: payment_type,
+          transactionReference: transaction_reference,
+        })
+        .catch((e) => logger.warn('Payment proof submitted notification failed (non-fatal):', e.message));
 
       res.status(201).json({
         success: true,
@@ -518,10 +529,9 @@ router.get('/bank-accounts/available', async (req, res) => {
       success: true,
       bank_accounts: bankAccounts,
     });
-    } catch (err) {
-      logger.error('Get bank accounts error:', err);
-      res.status(500).json({ success: false, error: err.message });
-    }
+  } catch (err) {
+    logger.error('Get bank accounts error:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
