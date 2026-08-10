@@ -14,6 +14,7 @@ import '../transactions/transactions_history_screen.dart';
 import 'deposit_screen.dart';
 import 'withdrawal_screen.dart';
 import 'deposit_status_screen.dart';
+import '../contributions/payment_proof_upload_screen.dart';
 
 /// Wallet Dashboard Screen
 class WalletDashboardScreen extends ConsumerStatefulWidget {
@@ -302,8 +303,10 @@ class _WalletDashboardScreenState extends ConsumerState<WalletDashboardScreen> {
   }
 
   Widget _buildQuickActions(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceAround,
+    return Wrap(
+      alignment: WrapAlignment.spaceAround,
+      spacing: 8,
+      runSpacing: 12,
       children: [
         _buildActionItem(
           context,
@@ -316,6 +319,12 @@ class _WalletDashboardScreenState extends ConsumerState<WalletDashboardScreen> {
           'Withdraw',
           Icons.file_upload_outlined,
           () => Navigator.push(context, MaterialPageRoute(builder: (context) => WithdrawalScreen(userId: widget.userId))),
+        ),
+        _buildActionItem(
+          context,
+          'Submit Proof',
+          Icons.receipt_outlined,
+          () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PaymentProofUploadScreen())),
         ),
         _buildActionItem(
           context,
