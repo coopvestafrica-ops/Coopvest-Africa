@@ -40,16 +40,27 @@ class LoanApiService {
   /// a pending record already exists for this guarantor.
   /// The loanId is used as the path param so the backend resolves the record
   /// by loan_id + guarantor_id (from the JWT token).
-  Future<GuarantorConfirmResponse> confirmGuarantee(String loanId, GuarantorConfirmRequest request) {
-    return _dio.post('/loans/$loanId/guarantors/confirm', data: request.toJson()).then((response) {
-      // Map the backend response to GuarantorConfirmResponse
+  /// Confirm guarantee via the dedicated guarantor route (QR scan flow).
+  /// Uses POST /guarantor/:loanId/confirm which upserts the loan_guarantors
+  /// row without a feature flag so it is always reachable.
+  Future<GuarantorConfirmResponse> confirmGuarantee(String loanId, GuarantorConfirmRequest request) async {
+    try {
+      final response = await _dio.post(
+        '/guarantor/$loanId/confirm',
+        data: request.toJson(),
+      );
       return GuarantorConfirmResponse(
         success: response.data['success'] as bool? ?? true,
         message: response.data['message'] as String? ?? 'Guarantee confirmed',
-        guarantorStatus: 'accepted',
-        guarantorsNowConfirmed: 0,
+        guarantorStatus: response.data['guarantor_status'] as String? ?? 'accepted',
+        guarantorsNowConfirmed: response.data['guarantors_now_confirmed'] as int? ?? 0,
       );
-    });
+    } on DioException catch (e) {
+      final msg = (e.response?.data is Map)
+          ? (e.response!.data['error'] ?? e.response!.data['message'] ?? 'Failed to confirm guarantee')
+          : 'Failed to confirm guarantee. Please try again.';
+      throw Exception(msg);
+    }
   }
 
   /// Decline guarantee (guarantor rejects)

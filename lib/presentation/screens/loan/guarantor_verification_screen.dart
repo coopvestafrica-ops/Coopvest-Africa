@@ -93,10 +93,27 @@ class _GuarantorVerificationScreenState
         _isProcessing = false;
       });
       if (mounted) {
+        String errorMsg;
+        final raw = e.toString();
+        if (raw.contains('SocketException') || raw.contains('Failed host') || raw.contains('connection')) {
+          errorMsg = 'No internet connection. Please check your network and try again.';
+        } else if (raw.contains('401') || raw.contains('Unauthorized')) {
+          errorMsg = 'Your session has expired. Please log in again.';
+        } else if (raw.contains('already confirmed')) {
+          errorMsg = 'You have already confirmed this guarantee.';
+        } else if (raw.contains('timeout')) {
+          errorMsg = 'The request timed out. Please try again.';
+        } else if (raw.contains('Exception:')) {
+          // Clean up 'Exception: <message>' wrapping
+          errorMsg = raw.replaceFirst(RegExp(r'^Exception:s*'), '');
+        } else {
+          errorMsg = 'Unable to confirm guarantee. Please try again.';
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to confirm guarantee: $e'),
+            content: Text(errorMsg),
             backgroundColor: CoopvestColors.error,
+            duration: const Duration(seconds: 5),
           ),
         );
       }

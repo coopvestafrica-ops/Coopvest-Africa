@@ -23,8 +23,8 @@ class ConnectivityService extends ChangeNotifier {
 
   Future<void> _init() async {
     // Check initial status
-    final results = await _connectivity.checkConnectivity();
-    _updateStatus(results);
+    final result = await _connectivity.checkConnectivity();
+    _updateStatus(result);
 
     // Listen for changes
     _subscription = _connectivity.onConnectivityChanged.listen(_updateStatus);
@@ -32,9 +32,11 @@ class ConnectivityService extends ChangeNotifier {
 
   void _updateStatus(List<ConnectivityResult> results) {
     final wasOffline = !isOnline;
-    final hasConnection = results.isNotEmpty && !results.contains(ConnectivityResult.none);
+    // Check if any result indicates connectivity is available
+    final isNowOffline = results.isEmpty || 
+                          results.every((r) => r == ConnectivityResult.none);
 
-    if (!hasConnection) {
+    if (isNowOffline) {
       _status = ConnectivityStatus.offline;
       _showOfflineBanner = true;
     } else {
