@@ -234,7 +234,7 @@ class _PaymentProofsStatusScreenState
         onPressed: () => Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => const PaymentProofUploadScreen(),
+            builder: (_) => PaymentProofUploadScreen(),
           ),
         ).then((_) => _loadInitial()),
         icon: const Icon(Icons.add),
@@ -262,7 +262,7 @@ class _PaymentProofsStatusScreenState
           const SizedBox(height: 120),
           _EmptyState(onSubmit: () => Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const PaymentProofUploadScreen()),
+            MaterialPageRoute(builder: (_) => PaymentProofUploadScreen()),
           ).then((_) => _loadInitial())),
         ],
       );

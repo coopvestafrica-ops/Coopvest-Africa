@@ -432,7 +432,7 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
         },
 
         '/deposit-status': (context) => const DepositStatusScreen(),
-        '/payment-proof-upload': (context) => const PaymentProofUploadScreen(),
+        '/payment-proof-upload': (context) => PaymentProofUploadScreen(),
         '/payment-proofs': (context) => const PaymentProofsStatusScreen(),
       },
     );
