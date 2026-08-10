@@ -52,6 +52,7 @@ import 'presentation/screens/wallet/wallet_dashboard_screen.dart';
 import 'presentation/screens/wallet/deposit_screen.dart';
 import 'presentation/screens/wallet/deposit_status_screen.dart';
 import 'presentation/screens/contributions/payment_proof_upload_screen.dart';
+import 'presentation/screens/contributions/payment_proofs_status_screen.dart';
 import 'presentation/screens/wallet/withdrawal_screen.dart';
 import 'presentation/screens/search/global_search_screen.dart';
 import 'config/env_config.dart';
@@ -432,6 +433,7 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
 
         '/deposit-status': (context) => const DepositStatusScreen(),
         '/payment-proof-upload': (context) => const PaymentProofUploadScreen(),
+        '/payment-proofs': (context) => const PaymentProofsStatusScreen(),
       },
     );
 

@@ -15,6 +15,7 @@ import 'deposit_screen.dart';
 import 'withdrawal_screen.dart';
 import 'deposit_status_screen.dart';
 import '../contributions/payment_proof_upload_screen.dart';
+import '../contributions/payment_proofs_status_screen.dart';
 
 /// Wallet Dashboard Screen
 class WalletDashboardScreen extends ConsumerStatefulWidget {
@@ -325,6 +326,12 @@ class _WalletDashboardScreenState extends ConsumerState<WalletDashboardScreen> {
           'Submit Proof',
           Icons.receipt_outlined,
           () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PaymentProofUploadScreen())),
+        ),
+        _buildActionItem(
+          context,
+          'My Proofs',
+          Icons.fact_check_outlined,
+          () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PaymentProofsStatusScreen())),
         ),
         _buildActionItem(
           context,
