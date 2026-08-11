@@ -409,7 +409,7 @@ router.post('/complete-registration', authenticate, async (req, res) => {
 
     // Build the same shape checkCompletion() expects so we can validate inline.
     const personal_info_candidate = {
-      gender, state, lga, staff_id, id_type,
+      gender, date_of_birth, address, state, lga, staff_id, id_type,
       nok_name, nok_relationship, nok_phone, nok_address,
       monthly_amount, contribution_method, preferred_payment_day,
     };
