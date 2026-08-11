@@ -8,6 +8,25 @@
 const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Look up a loan row by either its text reference (loans.loan_id, e.g.
+ * "LN-...") or its canonical UUID (loans.id). Returns the row or null.
+ * Makes the loan routes tolerant of whichever identifier the client sends.
+ */
+async function findLoanByIdentifier(identifier) {
+  if (!identifier) return null;
+  const column = UUID_RE.test(identifier) ? 'id' : 'loan_id';
+  const { data, error } = await supabase
+    .from('loans')
+    .select('*')
+    .eq(column, identifier)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
 const verifyLoanOwnership = async (req, res, next) => {
   try {
     const { loanId } = req.params;
@@ -15,13 +34,7 @@ const verifyLoanOwnership = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Loan ID is required' });
     }
 
-    const { data: loan, error } = await supabase
-      .from('loans')
-      .select('*')
-      .eq('loan_id', loanId)
-      .maybeSingle();
-
-    if (error) throw error;
+    const loan = await findLoanByIdentifier(loanId);
     if (!loan || loan.profile_id !== req.user.id) {
       return res.status(404).json({ success: false, error: 'Loan not found or access denied' });
     }
