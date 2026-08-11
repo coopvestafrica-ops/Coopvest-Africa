@@ -21,6 +21,33 @@ const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve a loanId param to the canonical UUID (loans.id).
+ * Accepts:
+ *   - a bare UUID (passes through)
+ *   - a text loan reference stored in loans.loan_id (e.g. "LN-…", "USR-…-LOAN-…")
+ * Returns the UUID string, or null if not found / not a valid format.
+ */
+async function resolveLoanUuid(rawId) {
+  const id = (rawId || '').trim();
+  if (!id) return null;
+  if (UUID_RE.test(id)) return id;
+  try {
+    const { data, error } = await supabase
+      .from('loans')
+      .select('id')
+      .eq('loan_id', id)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? data.id : null;
+  } catch (err) {
+    logger.error('resolveLoanUuid error:', err.message);
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -262,15 +289,28 @@ router.post(
       const { requestId } = req.params;
 
       // Support two caller flows:
-      //  1. Guarantor dashboard — passes loan_guarantors.id (the PK)
+      //  1. Guarantor dashboard — passes loan_guarantors.id (the PK, a UUID)
       //  2. QR-scan flow in the Flutter app — passes loans.id (the loan UUID)
+      // Some older mobile builds pass a composite text reference (e.g.
+      // "USR-…-LOAN-…") instead of a UUID. Resolve those to a real loan UUID
+      // before hitting the UUID-typed loan_guarantors columns, otherwise
+      // Postgres throws "invalid input syntax for type uuid".
+      let resolvedId = requestId;
+      if (!UUID_RE.test(resolvedId)) {
+        const loanUuid = await resolveLoanUuid(resolvedId);
+        if (!loanUuid) {
+          return res.status(400).json({ success: false, error: 'Invalid loan reference format. Please update your app and try again.' });
+        }
+        resolvedId = loanUuid;
+      }
+
       // Try by PK first; if nothing found, try by loan_id.
       let row = null;
-      {
+      if (UUID_RE.test(resolvedId)) {
         const { data: byId, error: err1 } = await supabase
           .from('loan_guarantors')
           .select('id, loan_id, qr_id, status')
-          .eq('id', requestId)
+          .eq('id', resolvedId)
           .eq('guarantor_id', req.user.id)
           .maybeSingle();
         if (err1) throw err1;
@@ -281,7 +321,7 @@ router.post(
         const { data: byLoanId, error: err2 } = await supabase
           .from('loan_guarantors')
           .select('id, loan_id, qr_id, status')
-          .eq('loan_id', requestId)
+          .eq('loan_id', resolvedId)
           .eq('guarantor_id', req.user.id)
           .maybeSingle();
         if (err2) throw err2;
@@ -348,13 +388,23 @@ router.post(
       const { requestId } = req.params;
       const { reason } = req.body || {};
 
+      // Resolve composite text references to a UUID (see /accept for details).
+      let resolvedId = requestId;
+      if (!UUID_RE.test(resolvedId)) {
+        const loanUuid = await resolveLoanUuid(resolvedId);
+        if (!loanUuid) {
+          return res.status(400).json({ success: false, error: 'Invalid loan reference format. Please update your app and try again.' });
+        }
+        resolvedId = loanUuid;
+      }
+
       // Same dual-lookup as /accept: try by PK first, then by loan_id (QR scan flow).
       let row = null;
-      {
+      if (UUID_RE.test(resolvedId)) {
         const { data: byId, error: err1 } = await supabase
           .from('loan_guarantors')
           .select('id, loan_id, status')
-          .eq('id', requestId)
+          .eq('id', resolvedId)
           .eq('guarantor_id', req.user.id)
           .maybeSingle();
         if (err1) throw err1;
@@ -365,7 +415,7 @@ router.post(
         const { data: byLoanId, error: err2 } = await supabase
           .from('loan_guarantors')
           .select('id, loan_id, status')
-          .eq('loan_id', requestId)
+          .eq('loan_id', resolvedId)
           .eq('guarantor_id', req.user.id)
           .maybeSingle();
         if (err2) throw err2;
@@ -533,14 +583,20 @@ router.post(
   validate,
   async (req, res) => {
     try {
-      const { loanId } = req.params;
+      const { loanId: rawLoanId } = req.params;
       const guarantorId = req.user.id;
       const { guarantor_name, guarantor_phone } = req.body || {};
 
       // Explicit hit-log so we can confirm in Render logs whether requests
       // are actually reaching this route (helps diagnose 404s caused by a
       // stale deploy vs. a genuine routing bug).
-      logger.info(`[guarantor/confirm] loanId=${loanId} guarantorId=${guarantorId}`);
+      logger.info(`[guarantor/confirm] loanId=${rawLoanId} guarantorId=${guarantorId}`);
+
+      // Resolve composite text references (e.g. "USR-…-LOAN-…") to a UUID.
+      const loanId = await resolveLoanUuid(rawLoanId);
+      if (!loanId) {
+        return res.status(400).json({ success: false, error: 'Invalid loan reference format. Please update your app and try again.' });
+      }
 
       const now = new Date().toISOString();
 

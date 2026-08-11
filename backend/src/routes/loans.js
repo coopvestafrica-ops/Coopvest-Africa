@@ -20,6 +20,31 @@ const logger = require('../utils/logger');
 
 const LOAN_TYPES = ['Quick Loan', 'Micro Loan', 'Business Loan', 'Emergency Loan'];
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve a loanId param to the canonical UUID (loans.id).
+ * Accepts a bare UUID (passthrough) or a text loan reference stored in
+ * loans.loan_id. Returns the UUID string, or null if not found.
+ */
+async function resolveLoanUuid(rawId) {
+  const id = (rawId || '').trim();
+  if (!id) return null;
+  if (UUID_RE.test(id)) return id;
+  try {
+    const { data, error } = await supabase
+      .from('loans')
+      .select('id')
+      .eq('loan_id', id)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? data.id : null;
+  } catch (err) {
+    logger.error('resolveLoanUuid error:', err.message);
+    return null;
+  }
+}
+
 const auditLog = async (actorId, action, targetId, metadata = {}) => {
   try {
     await supabase.from('audit_logs').insert({
@@ -442,10 +467,16 @@ router.post(
   validate,
   async (req, res) => {
     try {
-      const { loanId } = req.params;
+      const { loanId: rawLoanId } = req.params;
       const { guarantor_id: guarantorId, guarantor_name, guarantor_phone } = req.body;
 
       const actorId = req.user.id;
+
+      // Resolve composite text references to a UUID before querying.
+      const loanId = await resolveLoanUuid(rawLoanId);
+      if (!loanId) {
+        return res.status(400).json({ success: false, error: 'Invalid loan reference format. Please update your app and try again.' });
+      }
 
       const { data: row, error: findErr } = await supabase
         .from('loan_guarantors')
@@ -530,8 +561,14 @@ router.post(
   validate,
   async (req, res) => {
     try {
-      const { loanId } = req.params;
+      const { loanId: rawLoanId } = req.params;
       const { guarantor_id: guarantorId, reason } = req.body;
+
+      // Resolve composite text references to a UUID before querying.
+      const loanId = await resolveLoanUuid(rawLoanId);
+      if (!loanId) {
+        return res.status(400).json({ success: false, error: 'Invalid loan reference format. Please update your app and try again.' });
+      }
 
       const { data: row, error: findErr } = await supabase
         .from('loan_guarantors')
