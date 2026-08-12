@@ -545,30 +545,37 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
         return;
       }
 
-      // Generate unique loan ID
-      final loanId = '${widget.userId}-LOAN-${DateTime.now().millisecondsSinceEpoch}';
-      String? backendLoanId = loanId;
+      String? backendLoanId;
       String? qrId;
       String? qrCodeData;
 
-      // Register loan with backend
+      // Create the loan via the backend /loans/apply route.
+      // (Previously this called /loans/register, which does not exist, so the
+      // loan was never persisted and guarantors later saw
+      // "invalid loan reference format".)
       final apiClient = ref.read(apiClientProvider);
       try {
-        final regResponse = await apiClient.post('/loans/register', data: {
-          'loanRef': loanId,
+        final applyResponse = await apiClient.post('/loans/apply', data: {
           'loanType': _selectedLoanType,
           'amount': requestedAmount,
-          'monthlySavings': monthlySavings,
+          'tenureMonths': loanInfo['duration'],
           'purpose': _purposeController.text.trim(),
-          'interestRate': loanInfo['interest'],
-          'tenorMonths': loanInfo['duration'],
         });
-        
-        // Get the actual loan ID from backend response
-        if (regResponse != null && regResponse['loanId'] != null) {
-          backendLoanId = regResponse['loanId'];
+
+        // /loans/apply returns { success, loan, interest, bonus }.
+        // loan.loan_id is the text reference (e.g. "LN-...") used by
+        // verifyLoanOwnership; loan.id is the canonical UUID.
+        if (applyResponse != null && applyResponse['loan'] != null) {
+          final loan = applyResponse['loan'] as Map<String, dynamic>;
+          // Prefer the text reference for generate-qr (ownership middleware
+          // looks loans up by loan_id); fall back to the UUID if absent.
+          backendLoanId = (loan['loan_id'] as String?) ?? (loan['id'] as String?);
         }
-        
+
+        if (backendLoanId == null || backendLoanId!.isEmpty) {
+          throw Exception('Backend did not return a loan id');
+        }
+
         // Generate QR code via backend
         final qrResponse = await apiClient.post('/loans/$backendLoanId/generate-qr', data: {
           'applicantName': widget.userName,
@@ -591,13 +598,13 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
       if (qrCodeData == null || qrCodeData!.isEmpty) {
         // Create a local QR data with all loan info
         final loanStatusText = monthlySavings >= requestedAmount * 0.15 ? 'Approved' : 'Pending Review';
-        qrCodeData = 'COOPVEST_LOAN|${backendLoanId ?? loanId}|$_selectedLoanType|₦$requestedAmount|${widget.userName}|${widget.userPhone}|$loanStatusText';
-        qrId = backendLoanId ?? loanId;
+        qrCodeData = 'COOPVEST_LOAN|${backendLoanId ?? 'LOCAL-${DateTime.now().millisecondsSinceEpoch}'}|$_selectedLoanType|₦$requestedAmount|${widget.userName}|${widget.userPhone}|$loanStatusText';
+        qrId = backendLoanId ?? 'LOCAL-${DateTime.now().millisecondsSinceEpoch}';
       }
       
       if (monthlySavings >= requestedAmount * 0.15) {
         setState(() {
-          _loanId = backendLoanId ?? loanId;
+          _loanId = backendLoanId ?? 'LOCAL-${DateTime.now().millisecondsSinceEpoch}';
           _qrId = qrId;
           _qrCodeData = qrCodeData;
           _loanStatus = 'Approved';
@@ -610,7 +617,7 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
         _showSuccessDialog(showQr: showQr);
       } else if (monthlySavings >= requestedAmount * 0.1) {
         setState(() {
-          _loanId = backendLoanId ?? loanId;
+          _loanId = backendLoanId ?? 'LOCAL-${DateTime.now().millisecondsSinceEpoch}';
           _qrId = qrId;
           _qrCodeData = qrCodeData;
           _loanStatus = 'Pending Review';

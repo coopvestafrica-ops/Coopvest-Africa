@@ -151,7 +151,7 @@ router.get('/', async (req, res) => {
       .from('payment_proofs')
       .select(`
         *,
-        profile:profiles(id, user_id, name, email, phone, role)
+        profile:profiles!profile_id(id, user_id, name, email, phone, role)
       `, { count: 'exact' })
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
@@ -224,7 +224,7 @@ router.get('/:id', async (req, res) => {
       .from('payment_proofs')
       .select(`
         *,
-        profile:profiles(id, user_id, name, email, phone, role, created_at)
+        profile:profiles!profile_id(id, user_id, name, email, phone, role, created_at)
       `)
       .eq('id', id)
       .is('deleted_at', null)
@@ -682,7 +682,7 @@ router.get('/export/pending', async (req, res) => {
         payment_method,
         transaction_reference,
         status,
-        profile:profiles(user_id, name, email, phone)
+        profile:profiles!profile_id(user_id, name, email, phone)
       `)
       .eq('status', 'pending')
       .is('deleted_at', null)
