@@ -9,6 +9,7 @@ import '../../../core/network/api_client.dart';
 import '../../../data/models/referral_models.dart';
 import '../../../presentation/providers/auth_provider.dart';
 import '../../../presentation/providers/contributions/contribution_provider.dart';
+import '../../../presentation/providers/kyc_provider.dart';
 import '../../../presentation/providers/referral_provider.dart';
 import '../../../presentation/providers/wallet_provider.dart';
 import '../../../presentation/widgets/common/buttons.dart';
@@ -49,6 +50,8 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(walletProvider.notifier).loadWallet();
       ref.read(contributionProvider.notifier).loadContributions();
+      // Refresh KYC status so we can gate the application on completion.
+      ref.read(kycProvider.notifier).initializeKYC();
     });
   }
 
@@ -184,9 +187,7 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
         : summaryContributionMonths;
     
     // Determine eligibility
-    // TEMP: forced true for testing — restore original check when done:
-    // final isEligible = membershipMonths >= 6 && finalContributionMonths >= 6;
-    final isEligible = true;
+    final isEligible = membershipMonths >= 6 && finalContributionMonths >= 6;
     
     return {
       'isEligible': isEligible,
@@ -477,6 +478,18 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
   }
 
   Future<void> _submitApplication() async {
+    // Gate: members must have submitted their KYC before applying for a loan.
+    if (!ref.read(isKycSubmittedProvider)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please complete your KYC before applying for a loan. Go to Profile → Complete KYC to finish verification.'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 5),
+        ),
+      );
+      return;
+    }
+
     // First check if user is eligible for loan
     final eligibility = _checkLoanEligibility();
     if (!(eligibility['isEligible'] as bool)) {

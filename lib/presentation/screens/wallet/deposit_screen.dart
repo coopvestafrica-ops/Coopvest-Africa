@@ -28,6 +28,7 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
   final _amountController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   String _selectedPaymentMethod = 'bank_transfer';
+  String _selectedDepositType = 'monthly_contribution';
   bool _isProcessing = false;
   File? _proofFile;
   bool _isUploadingProof = false;
@@ -41,6 +42,33 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
       ref.read(paymentSettingsProvider.notifier).loadFromApi();
     });
   }
+
+  final List<Map<String, dynamic>> _depositTypes = [
+    {
+      'value': 'monthly_contribution',
+      'label': 'Monthly Contribution',
+      'icon': Icons.savings_outlined,
+      'description': 'Regular monthly savings contribution',
+    },
+    {
+      'value': 'loan_repayment',
+      'label': 'Loan Repayment',
+      'icon': Icons.payments_outlined,
+      'description': 'Repay an active loan',
+    },
+    {
+      'value': 'overdue_payment',
+      'label': 'Overdue Payment',
+      'icon': Icons.schedule_outlined,
+      'description': 'Settle an overdue contribution',
+    },
+    {
+      'value': 'fine',
+      'label': 'Fine',
+      'icon': Icons.gavel_outlined,
+      'description': 'Pay an imposed fine or penalty',
+    },
+  ];
 
   final List<Map<String, dynamic>> _paymentMethods = [
     {'value': 'bank_transfer', 'label': 'Bank Transfer', 'icon': Icons.account_balance},
@@ -203,6 +231,14 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
     );
   }
 
+  String get _selectedDepositTypeLabel {
+    final match = _depositTypes.firstWhere(
+      (t) => t['value'] == _selectedDepositType,
+      orElse: () => _depositTypes.first,
+    );
+    return match['label'] as String;
+  }
+
   Future<void> _processDeposit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isProcessing = true);
@@ -231,8 +267,9 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
 
       final result = await ref.read(walletProvider.notifier).makeContribution(
         amount: amount,
-        description: 'Wallet deposit via ${_selectedPaymentMethod.replaceAll('_', ' ')}',
+        description: '$_selectedDepositTypeLabel via ${_selectedPaymentMethod.replaceAll('_', ' ')}',
         proofUrl: proofUrl,
+        paymentType: _selectedDepositType,
       );
       
       // Safely extract the message from the result
@@ -488,6 +525,66 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text('Deposit Type', style: TextStyle(fontWeight: FontWeight.bold, color: context.textPrimary)),
+                const SizedBox(height: 4),
+                Text(
+                  'What is this deposit for?',
+                  style: TextStyle(fontSize: 12, color: context.textSecondary),
+                ),
+                const SizedBox(height: 12),
+                Column(
+                  children: _depositTypes.map((type) {
+                    final isSelected = _selectedDepositType == type['value'];
+                    return GestureDetector(
+                      onTap: () => setState(() => _selectedDepositType = type['value'] as String),
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: isSelected ? CoopvestColors.primary.withOpacity(0.1) : context.cardBackground,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isSelected ? CoopvestColors.primary : context.dividerColor,
+                            width: isSelected ? 2 : 1,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              (type['icon'] as IconData?) ?? Icons.payments,
+                              color: isSelected ? CoopvestColors.primary : context.textSecondary,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    type['label'] as String,
+                                    style: TextStyle(
+                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                      color: context.textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    type['description'] as String,
+                                    style: TextStyle(fontSize: 11, color: context.textSecondary),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (isSelected)
+                              const Icon(Icons.check_circle, color: CoopvestColors.primary),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+
+                const SizedBox(height: 24),
+
                 AppTextField(
                   label: 'Amount',
                   hint: 'Enter deposit amount',

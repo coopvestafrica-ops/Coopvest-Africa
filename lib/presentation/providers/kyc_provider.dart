@@ -286,6 +286,18 @@ final isKYCCompleteProvider = Provider<bool>((ref) {
   return kycState.isComplete;
 });
 
+/// Whether the member has submitted their KYC (status submitted or verified).
+/// Used to gate features (e.g. loan applications) and to decide whether the
+/// "Complete KYC" prompt should be shown.
+final isKycSubmittedProvider = Provider<bool>((ref) {
+  final kycState = ref.watch(kycProvider);
+  final status = kycState.submission?.status ?? 'pending';
+  return status == 'submitted' ||
+      status == 'verified' ||
+      status == 'in_review' ||
+      status == 'approved';
+});
+
 /// KYC Error Provider
 final kycErrorProvider = Provider<String?>((ref) {
   final kycState = ref.watch(kycProvider);

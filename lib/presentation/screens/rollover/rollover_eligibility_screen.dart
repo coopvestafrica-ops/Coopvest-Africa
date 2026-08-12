@@ -10,25 +10,46 @@ import '../../widgets/common/buttons.dart';
 import '../../widgets/rollover/rollover_common_widgets.dart';
 
 /// Rollover Eligibility Check Screen
-class RolloverEligibilityScreen extends ConsumerWidget {
+class RolloverEligibilityScreen extends ConsumerStatefulWidget {
   final Loan? loan;
   const RolloverEligibilityScreen({super.key, this.loan});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<RolloverEligibilityScreen> createState() =>
+      _RolloverEligibilityScreenState();
+}
+
+class _RolloverEligibilityScreenState
+    extends ConsumerState<RolloverEligibilityScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Ensure loans are fresh so we can detect an active/repaying loan.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final loanState = ref.read(loanProvider);
+      if (loanState.loans.isEmpty && !loanState.isLoading) {
+        ref.read(loanProvider.notifier).getLoans();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final loanState = ref.watch(loanProvider);
     final rolloverState = ref.watch(rolloverProvider);
     final rolloverNotifier = ref.read(rolloverProvider.notifier);
 
     // Find active loan - show message if none exists
     final activeLoans = loanState.loans.where((l) => l.status == 'active' || l.status == 'repaying').toList();
-    final activeLoan = loan ?? (activeLoans.isNotEmpty ? activeLoans.first : null);
+    final activeLoan = widget.loan ?? (activeLoans.isNotEmpty ? activeLoans.first : null);
 
     return Scaffold(
       backgroundColor: context.scaffoldBackground,
       appBar: AppBar(title: Text('Rollover Eligibility', style: TextStyle(color: context.textPrimary, fontWeight: FontWeight.bold)), elevation: 0),
       body: activeLoan == null
-          ? _buildNoActiveLoanMessage(context)
+          ? (loanState.isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _buildNoActiveLoanMessage(context))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(

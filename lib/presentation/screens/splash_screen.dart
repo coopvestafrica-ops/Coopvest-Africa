@@ -35,7 +35,7 @@ class _SplashScreenState extends State<SplashScreen>
   bool _soundPlayed = false;
   int _elapsedSeconds = 0;
   
-  static const int splashDurationSeconds = 30;
+  static const int splashDurationSeconds = 3;
 
   @override
   void initState() {

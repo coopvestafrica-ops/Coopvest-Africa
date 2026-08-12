@@ -15,7 +15,9 @@ Loan _convertLoanDataToLoan(LoanData data) {
     tenure: data.tenure,
     interestRate: data.interestRate,
     monthlyRepayment: data.monthlyRepayment,
-    totalRepayment: data.monthlyRepayment * data.tenure,
+    totalRepayment: data.totalRepayment > 0
+        ? data.totalRepayment
+        : data.monthlyRepayment * data.tenure,
     status: data.status,
     purpose: data.purpose,
     guarantorsAccepted: 0,
@@ -86,7 +88,9 @@ class LoanNotifier extends StateNotifier<LoansState> {
   Future<void> getLoans() async {
     state = state.copyWith(status: LoanStatus.loading);
     try {
-      final userId = await _authRepository.getUserId();
+      // The backend resolves the user from the JWT; getUserId() is not needed
+      // for the request itself but we call it to surface auth issues early.
+      await _authRepository.getUserId();
       final response = await _loanApiService.getUserLoans();
 
       if (response.success) {

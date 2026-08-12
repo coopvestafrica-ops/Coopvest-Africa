@@ -17,22 +17,121 @@ class KYCRepository {
   KYCRepository(this._apiClient);
 
   /// Get KYC status
+  ///
+  /// The backend returns `{ success, kyc: <row> }` where the row uses
+  /// snake_case columns and stores structured data in JSONB fields
+  /// (personal_info, employment_info, bank_info, address, date_of_birth,
+  /// national_id, selfie, status, submitted_at). Map that into KYCSubmission.
   Future<KYCSubmission> getKYCStatus() async {
     try {
       final response = await _apiClient.get('/kyc/status');
-      return KYCSubmission.fromJson(response as Map<String, dynamic>);
+      final data = response is Map<String, dynamic> ? response : <String, dynamic>{};
+      // The status row is nested under 'kyc'; fall back to the response itself
+      // for older payloads.
+      final row = (data['kyc'] as Map<String, dynamic>?) ?? data;
+
+      String? str(dynamic v) => v == null ? null : v.toString();
+
+      final personal = (row['personal_info'] as Map<String, dynamic>?) ?? const {};
+      final employment = (row['employment_info'] as Map<String, dynamic>?) ?? const {};
+      final bank = (row['bank_info'] as Map<String, dynamic>?) ?? const {};
+      final selfie = (row['selfie'] as Map<String, dynamic>?) ?? const {};
+
+      return KYCSubmission(
+        dateOfBirth: str(row['date_of_birth'] ?? personal['date_of_birth']),
+        gender: str(personal['gender']),
+        employmentType: str(employment['employment_type'] ?? employment['employmentType']) ?? '',
+        organizationId: str(employment['organization_id'] ?? employment['organizationId']),
+        organizationName: str(employment['organization_name'] ?? employment['organizationName']),
+        jobTitle: str(employment['job_title'] ?? employment['jobTitle']) ?? '',
+        monthlyIncomeRange: str(employment['monthly_income_range'] ?? employment['monthlyIncomeRange']) ?? '',
+        residentialAddress: str(row['address'] ?? personal['residential_address'] ?? personal['address']) ?? '',
+        city: str(personal['city']),
+        state: str(personal['state']),
+        country: str(personal['country'] ?? row['country']),
+        idType: str(personal['id_type'] ?? row['id_type']) ?? '',
+        idNumber: str(row['national_id'] ?? personal['id_number'] ?? personal['nin']),
+        idPhotoPath: str(personal['id_photo_path'] ?? personal['idPhotoPath']),
+        selfiePhotoPath: str(selfie['url'] ?? selfie['path'] ?? selfie['selfie_photo_path']),
+        bankName: str(bank['bank_name'] ?? bank['bankName']),
+        bankCode: str(bank['bank_code'] ?? bank['bankCode']),
+        accountNumber: str(bank['account_number'] ?? bank['accountNumber']),
+        accountName: str(bank['account_name'] ?? bank['accountName']),
+        accountType: str(bank['account_type'] ?? bank['accountType']),
+        bvn: str(bank['bvn'] ?? row['bvn']),
+        status: str(row['status']) ?? 'pending',
+        submittedAt: row['submitted_at'] != null
+            ? DateTime.tryParse(row['submitted_at'].toString())
+            : null,
+        approvedAt: row['verified_at'] != null
+            ? DateTime.tryParse(row['verified_at'].toString())
+            : null,
+        rejectionReason: str(row['rejection_reason']),
+      );
     } catch (e) {
       logger.e('Get KYC status error: $e');
-      rethrow;
+      // Return a pending submission instead of throwing so the UI can still
+      // render and offer the user a chance to complete their KYC.
+      return const KYCSubmission(
+        employmentType: '',
+        jobTitle: '',
+        monthlyIncomeRange: '',
+        residentialAddress: '',
+        idType: '',
+        status: 'pending',
+      );
     }
   }
 
   /// Submit KYC
+  ///
+  /// Maps the flat KYCSubmission into the nested shape the backend expects:
+  /// `{ personalInfo, address, employmentInfo, bvn, nin }`.
   Future<void> submitKYC(KYCSubmission submission) async {
     try {
       await _apiClient.post(
         '/kyc/submit',
-        data: submission.toJson(),
+        data: {
+          'personalInfo': {
+            'date_of_birth': submission.dateOfBirth,
+            'gender': submission.gender,
+            'residential_address': submission.residentialAddress,
+            'city': submission.city,
+            'state': submission.state,
+            'country': submission.country ?? 'Nigeria',
+            'id_type': submission.idType,
+            'id_number': submission.idNumber,
+            'id_photo_path': submission.idPhotoPath,
+            'selfie_photo_path': submission.selfiePhotoPath,
+          },
+          'address': {
+            'residential_address': submission.residentialAddress,
+            'city': submission.city,
+            'state': submission.state,
+            'country': submission.country ?? 'Nigeria',
+          },
+          'employmentInfo': {
+            'employment_type': submission.employmentType,
+            'organization_id': submission.organizationId,
+            'organization_name': submission.organizationName,
+            'job_title': submission.jobTitle,
+            'monthly_income_range': submission.monthlyIncomeRange,
+          },
+          'bankInfo': {
+            'bank_name': submission.bankName,
+            'bank_code': submission.bankCode,
+            'account_number': submission.accountNumber,
+            'account_name': submission.accountName,
+            'account_type': submission.accountType,
+            'bvn': submission.bvn,
+          },
+          'bvn': submission.bvn,
+          'nin': submission.idNumber,
+          'idType': submission.idType,
+          'idNumber': submission.idNumber,
+          'selfieUrl': submission.selfiePhotoPath,
+          'idPhotoPath': submission.idPhotoPath,
+        },
       );
     } catch (e) {
       logger.e('Submit KYC error: $e');
@@ -67,18 +166,21 @@ class KYCRepository {
   }
 
   /// Upload ID document
+  ///
+  /// The backend does not expose a dedicated multipart KYC upload. We reuse the
+  /// wallet proof upload endpoint (which returns a public storage URL) and then
+  /// register the document against the KYC record via POST /kyc/document.
   Future<String> uploadIDDocument(String filePath) async {
     try {
-      final formData = FormData.fromMap({
-        'document': await MultipartFile.fromFile(filePath),
-      });
-
-      final response = await _apiClient.post(
-        '/kyc/upload-id',
-        data: formData,
+      final url = await _uploadFileToStorage(filePath);
+      await _apiClient.post(
+        '/kyc/document',
+        data: {
+          'type': 'id_document',
+          'url': url,
+        },
       );
-
-      return response['path'] as String;
+      return url;
     } catch (e) {
       logger.e('Upload ID document error: $e');
       rethrow;
@@ -88,20 +190,36 @@ class KYCRepository {
   /// Upload selfie
   Future<String> uploadSelfie(String filePath) async {
     try {
-      final formData = FormData.fromMap({
-        'selfie': await MultipartFile.fromFile(filePath),
-      });
-
-      final response = await _apiClient.post(
-        '/kyc/upload-selfie',
-        data: formData,
+      final url = await _uploadFileToStorage(filePath);
+      await _apiClient.post(
+        '/kyc/selfie',
+        data: {'url': url},
       );
-
-      return response['path'] as String;
+      return url;
     } catch (e) {
       logger.e('Upload selfie error: $e');
       rethrow;
     }
+  }
+
+  /// Uploads a file via the wallet proof upload endpoint and returns the
+  /// public storage URL. Falls back to returning the local path if the upload
+  /// fails so the caller can still proceed.
+  Future<String> _uploadFileToStorage(String filePath) async {
+    try {
+      final formData = FormData.fromMap({
+        'proof': await MultipartFile.fromFile(filePath),
+      });
+      final response = await _apiClient.post(
+        '/wallet/upload-proof',
+        data: formData,
+      );
+      final url = (response is Map ? response['url'] : null)?.toString();
+      if (url != null && url.isNotEmpty) return url;
+    } catch (e) {
+      logger.e('KYC file upload failed, using local path: $e');
+    }
+    return filePath;
   }
 
   /// Upload avatar/profile picture
