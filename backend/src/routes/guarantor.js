@@ -365,7 +365,7 @@ router.post(
         target_model: 'LoanGuarantor',
         target_id: row.id,
         metadata: { loanId: row.loan_id },
-      }).catch(() => {});
+      }).then(() => {}, () => {});
 
       res.json({ success: true, message: 'Guarantee accepted successfully' });
     } catch (err) {
@@ -443,7 +443,7 @@ router.post(
         target_model: 'LoanGuarantor',
         target_id: row.id,
         metadata: { loanId: row.loan_id, reason: reason || null },
-      }).catch(() => {});
+      }).then(() => {}, () => {});
 
       res.json({ success: true, message: 'Guarantee request declined' });
     } catch (err) {
@@ -558,7 +558,7 @@ router.post(
         target_model: 'LoanGuarantor',
         target_id: guaranteeId,
         metadata: { loanId: row.loan_id },
-      }).catch(() => {});
+      }).then(() => {}, () => {});
 
       res.json({ success: true, message: 'Guarantee withdrawn successfully' });
     } catch (err) {
@@ -659,7 +659,7 @@ router.post(
         target_model: 'LoanGuarantor',
         target_id: loanId,
         metadata: { loanId, guarantorName: guarantor_name },
-      }).catch(() => {});
+      }).then(() => {}, () => {});
 
       res.json({
         success: true,
