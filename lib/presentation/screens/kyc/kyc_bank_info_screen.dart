@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../config/theme_config.dart';
 import '../../../config/theme_extension.dart';
 import '../../../data/models/kyc_models.dart';
+import '../../../presentation/providers/auth_provider.dart';
 import '../../../presentation/providers/kyc_provider.dart';
 import '../../../presentation/widgets/common/buttons.dart';
 import '../../../presentation/widgets/common/cards.dart';
@@ -19,14 +20,15 @@ class KYCBankInfoScreen extends ConsumerStatefulWidget {
 class _KYCBankInfoScreenState extends ConsumerState<KYCBankInfoScreen> {
   late TextEditingController _accountNumberController;
   late TextEditingController _accountNameController;
-  
-  
+  late TextEditingController _bvnController;
+
+
   String? _selectedBank;
   String? _selectedAccountType;
-  
+
   final List<Map<String, dynamic>> _banks = BankTypes.banks;
   final List<Map<String, dynamic>> _accountTypes = BankAccountTypes.types;
-  
+
   bool _accountNameVerified = false;
   bool _isVerifyingAccountName = false;
 
@@ -35,12 +37,55 @@ class _KYCBankInfoScreenState extends ConsumerState<KYCBankInfoScreen> {
     super.initState();
     _accountNumberController = TextEditingController();
     _accountNameController = TextEditingController();
+    _bvnController = TextEditingController();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.listenManual(kycProvider, (prev, next) {
+        if (next.status == KYCStatus.loaded &&
+            (prev == null || prev.status != KYCStatus.loaded)) {
+          _loadExistingAndMaybeSkip();
+        }
+      });
+      _loadExistingAndMaybeSkip();
+    });
+  }
+
+  /// Pre-fill from an existing KYC submission and skip this step entirely if
+  /// it's already complete.
+  void _loadExistingAndMaybeSkip() {
+    final kycState = ref.read(kycProvider);
+    if (kycState.status == KYCStatus.initial ||
+        kycState.status == KYCStatus.loading) {
+      ref.read(kycProvider.notifier).initializeKYC();
+      return;
+    }
+
+    final sub = kycState.submission;
+    if (sub == null) return;
+
+    setState(() {
+      _selectedBank = sub.bankName;
+      _accountNumberController.text = sub.accountNumber ?? '';
+      _accountNameController.text = sub.accountName ?? '';
+      _accountNameVerified = (sub.accountName ?? '').isNotEmpty;
+      _selectedAccountType = sub.accountType;
+      _bvnController.text = sub.bvn ?? '';
+    });
+
+    if (sub.bankName != null &&
+        sub.accountNumber != null &&
+        sub.accountName != null &&
+        sub.accountType != null &&
+        sub.bvn != null) {
+      // Bank step complete — go to success.
+      Navigator.of(context).pushReplacementNamed('/kyc-complete');
+    }
   }
 
   @override
   void dispose() {
     _accountNumberController.dispose();
     _accountNameController.dispose();
+    _bvnController.dispose();
     super.dispose();
   }
 
@@ -89,8 +134,12 @@ class _KYCBankInfoScreenState extends ConsumerState<KYCBankInfoScreen> {
       _showError('Please select your account type');
       return;
     }
+    if (_bvnController.text.trim().isEmpty) {
+      _showError('Please enter your BVN');
+      return;
+    }
 
-    // Save bank details to KYC state
+    // Save bank details (incl. BVN) to KYC state
     final kycNotifier = ref.read(kycProvider.notifier);
     final bankCode = BankTypes.getBankCode(_selectedBank!);
     kycNotifier.updateBankDetails(
@@ -99,9 +148,23 @@ class _KYCBankInfoScreenState extends ConsumerState<KYCBankInfoScreen> {
       accountNumber: _accountNumberController.text,
       accountName: _accountNameController.text,
       accountType: _selectedAccountType,
+      bvn: _bvnController.text.trim(),
     );
 
-    Navigator.of(context).pushNamed('/kyc-complete');
+    // Re-submit the (now complete) KYC record so bank/BVN details persist, then
+    // refresh the auth state so the KYC entry hides for already-submitted users.
+    _submitAndContinue();
+  }
+
+  Future<void> _submitAndContinue() async {
+    try {
+      await ref.read(kycProvider.notifier).submitKYC();
+      ref.read(authProvider.notifier).markKycSubmitted();
+    } catch (_) {
+      // Non-fatal: the selfie step already submitted the KYC core; bank
+      // details are saved locally on the submission. Proceed to success.
+    }
+    if (mounted) Navigator.of(context).pushReplacementNamed('/kyc-complete');
   }
 
   void _showError(String message) {
@@ -236,6 +299,14 @@ class _KYCBankInfoScreenState extends ConsumerState<KYCBankInfoScreen> {
                     _selectedAccountType = value;
                   });
                 },
+              ),
+              const SizedBox(height: 20),
+
+              AppTextField(
+                label: 'BVN *',
+                hint: 'Enter your Bank Verification Number',
+                controller: _bvnController,
+                keyboardType: TextInputType.number,
               ),
 
               const SizedBox(height: 40),

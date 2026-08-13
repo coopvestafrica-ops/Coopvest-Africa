@@ -116,15 +116,31 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(status: AuthStatus.loading);
     try {
       await _authRepository.submitKYC(submission: submission);
+      // Mark KYC as submitted (awaiting admin review). We deliberately do NOT
+      // set 'approved' here — approval is an admin action. Using 'submitted'
+      // (rather than the old 'pending') lets AuthGuard distinguish members who
+      // have already submitted from those who haven't, so the KYC prompt no
+      // longer re-appears on every app start for pending-review members.
       state = state.copyWith(
         status: AuthStatus.kycPending,
-        user: state.user?.copyWith(kycStatus: 'pending'),
+        user: state.user?.copyWith(kycStatus: 'submitted'),
       );
     } catch (e) {
       logger.e('Submit KYC error: $e');
       state = state.copyWith(status: AuthStatus.error, error: e.toString());
       rethrow;
     }
+  }
+
+  /// Mark the current user's KYC as submitted (awaiting review). Called by the
+  /// KYC flow after a successful `/kyc/submit` so the auth state reflects the
+  /// new lifecycle status without a full re-fetch.
+  void markKycSubmitted() {
+    if (state.user == null) return;
+    state = state.copyWith(
+      status: AuthStatus.kycPending,
+      user: state.user!.copyWith(kycStatus: 'submitted'),
+    );
   }
 
   /// Check KYC status

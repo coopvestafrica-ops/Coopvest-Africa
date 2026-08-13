@@ -60,16 +60,33 @@ router.post(
   validate,
   async (req, res) => {
     try {
-      const { personalInfo, address, employmentInfo, bvn, nin } = req.body;
+      const { personalInfo, address, employmentInfo, bankInfo, bvn, nin } = req.body;
       const kyc = await getOrCreateKyc(req.user.id);
+
+      // Merge new structured fields into the existing JSONB blocks so partial
+      // submits (e.g. bank-only updates) don't wipe previously saved data.
+      const mergedPersonal = {
+        ...(kyc.personal_info || {}),
+        ...(personalInfo || {}),
+      };
+      const mergedEmployment = {
+        ...(kyc.employment_info || {}),
+        ...(employmentInfo || {}),
+      };
+      const mergedBank = {
+        ...(kyc.bank_info || {}),
+        ...(bankInfo || {}),
+      };
+
       const { data, error } = await supabase
         .from('kyc')
         .update({
-          personal_info: personalInfo,
+          personal_info: mergedPersonal,
           address: address || kyc.address,
-          employment_info: employmentInfo || kyc.employment_info,
-          bvn: bvn || kyc.bvn,
-          nin: nin || kyc.nin,
+          employment_info: mergedEmployment,
+          bank_info: mergedBank,
+          bvn: bvn || kyc.bvn || (bankInfo && bankInfo.bvn) || null,
+          nin: nin || kyc.nin || null,
           status: 'submitted',
           submitted_at: new Date().toISOString(),
         })

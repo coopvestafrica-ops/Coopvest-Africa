@@ -20,10 +20,11 @@ class KYCIDUploadScreen extends ConsumerStatefulWidget {
 
 class _KYCIDUploadScreenState extends ConsumerState<KYCIDUploadScreen> {
   late TextEditingController _idNumberController;
-  
+  late TextEditingController _staffIdController;
+
   String? _selectedIDType;
   String? _idImagePath;
-  
+
   final List<Map<String, dynamic>> _idTypes = IDTypes.types;
   final ImagePicker _imagePicker = ImagePicker();
 
@@ -31,11 +32,62 @@ class _KYCIDUploadScreenState extends ConsumerState<KYCIDUploadScreen> {
   void initState() {
     super.initState();
     _idNumberController = TextEditingController();
+    _staffIdController = TextEditingController();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.listenManual(kycProvider, (prev, next) {
+        if (next.status == KYCStatus.loaded &&
+            (prev == null || prev.status != KYCStatus.loaded)) {
+          _loadExistingAndMaybeSkip();
+        }
+      });
+      _loadExistingAndMaybeSkip();
+    });
+  }
+
+  /// Pre-fill from an existing KYC submission and skip this step entirely if
+  /// it's already complete.
+  void _loadExistingAndMaybeSkip() {
+    final kycState = ref.read(kycProvider);
+    if (kycState.status == KYCStatus.initial ||
+        kycState.status == KYCStatus.loading) {
+      ref.read(kycProvider.notifier).initializeKYC();
+      return;
+    }
+
+    final sub = kycState.submission;
+    if (sub == null) return;
+
+    setState(() {
+      _selectedIDType = sub.idType.isNotEmpty ? sub.idType : null;
+      _idNumberController.text = sub.idNumber ?? '';
+      _staffIdController.text = sub.staffId ?? '';
+      _idImagePath = sub.idPhotoPath;
+    });
+
+    if (sub.idType.isNotEmpty &&
+        sub.idNumber != null &&
+        sub.idPhotoPath != null) {
+      // Identification complete — jump to the next incomplete step.
+      _skipToNextIncompleteStep(sub);
+    }
+  }
+
+  void _skipToNextIncompleteStep(KYCSubmission sub) {
+    final missing = sub.missingSections;
+    if (missing.isEmpty || missing.first == 'identification') return;
+    final route = {
+      'nextOfKin': '/kyc-next-of-kin',
+      'bank': '/kyc-bank-info',
+    }[missing.first];
+    if (route != null) {
+      Navigator.of(context).pushReplacementNamed(route);
+    }
   }
 
   @override
   void dispose() {
     _idNumberController.dispose();
+    _staffIdController.dispose();
     super.dispose();
   }
 
@@ -171,7 +223,37 @@ class _KYCIDUploadScreenState extends ConsumerState<KYCIDUploadScreen> {
       _showError('Please upload a photo of your ID');
       return;
     }
-    Navigator.of(context).pushNamed('/kyc-selfie');
+
+    // Save ID details (and optional staff id) into the KYC state, then upload
+    // the ID photo and capture a selfie next.
+    final staffId = _staffIdController.text.trim().isEmpty
+        ? null
+        : _staffIdController.text.trim();
+    ref.read(kycProvider.notifier).updateIDDetails(
+          idType: _selectedIDType,
+          idNumber: _idNumberController.text.trim(),
+          idPhotoPath: _idImagePath,
+          staffId: staffId,
+        );
+
+    _uploadAndContinue();
+  }
+
+  Future<void> _uploadAndContinue() async {
+    // Only upload if the stored path looks like a local file (not an existing
+    // remote URL already on the server).
+    final isLocalFile = _idImagePath != null &&
+        !_idImagePath!.startsWith('http') &&
+        File(_idImagePath!).existsSync();
+    if (isLocalFile) {
+      try {
+        await ref.read(kycProvider.notifier).uploadIDDocument(_idImagePath!);
+      } catch (e) {
+        _showError('Failed to upload ID photo: $e');
+        return;
+      }
+    }
+    if (mounted) Navigator.of(context).pushNamed('/kyc-selfie');
   }
 
   void _goBack() {
@@ -246,6 +328,13 @@ class _KYCIDUploadScreenState extends ConsumerState<KYCIDUploadScreen> {
                 label: 'ID Number *',
                 hint: 'Enter your ID number',
                 controller: _idNumberController,
+              ),
+              const SizedBox(height: 20),
+
+              AppTextField(
+                label: 'Staff ID Number (if employed)',
+                hint: 'Leave blank if not applicable',
+                controller: _staffIdController,
               ),
               const SizedBox(height: 24),
 

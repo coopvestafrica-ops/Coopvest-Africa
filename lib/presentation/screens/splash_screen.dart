@@ -35,7 +35,7 @@ class _SplashScreenState extends State<SplashScreen>
   bool _soundPlayed = false;
   int _elapsedSeconds = 0;
   
-  static const int splashDurationSeconds = 3;
+  static const int splashDurationSeconds = 6;
 
   @override
   void initState() {
@@ -294,17 +294,21 @@ class _SplashScreenState extends State<SplashScreen>
                               child: Image.asset(
                                 'assets/images/logo.png',
                                 fit: BoxFit.cover,
+                                // Smooth fade-in once the asset decodes, so the
+                                // logo never pops in abruptly (and never leaves a
+                                // blank white tile while loading).
+                                frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                                  if (wasSynchronouslyLoaded || frame != null) {
+                                    return AnimatedOpacity(
+                                      opacity: frame != null ? 1.0 : 0.0,
+                                      duration: const Duration(milliseconds: 350),
+                                      child: child,
+                                    );
+                                  }
+                                  return _LogoFallback();
+                                },
                                 errorBuilder: (context, error, stackTrace) {
-                                  return Center(
-                                    child: Text(
-                                      'CV',
-                                      style: TextStyle(
-                                        color: CoopvestColors.primary,
-                                        fontSize: 56,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  );
+                                  return const _LogoFallback();
                                 },
                               ),
                             ),
@@ -446,6 +450,48 @@ class _SplashScreenState extends State<SplashScreen>
           ),
         );
       },
+    );
+  }
+}
+
+/// Branded fallback shown while the logo asset decodes or if it fails to load.
+/// A gradient medallion with a savings glyph and the "CV" monogram — far more
+/// polished than a bare white tile, so the splash never looks like "just a
+/// green screen" even before the image is ready.
+class _LogoFallback extends StatelessWidget {
+  const _LogoFallback();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            CoopvestColors.primary,
+            CoopvestColors.primaryDark,
+          ],
+        ),
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          const Icon(Icons.savings_outlined, color: Colors.white, size: 54),
+          Positioned(
+            bottom: 26,
+            child: Text(
+              'CV',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.9),
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 2,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

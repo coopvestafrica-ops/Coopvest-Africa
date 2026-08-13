@@ -41,6 +41,7 @@ import 'presentation/screens/kyc/kyc_id_upload_screen.dart';
 import 'presentation/screens/kyc/kyc_selfie_screen.dart';
 import 'presentation/screens/kyc/kyc_success_screen.dart';
 import 'presentation/screens/kyc/kyc_bank_info_screen.dart';
+import 'presentation/screens/kyc/kyc_next_of_kin_screen.dart';
 import 'presentation/screens/loan/loan_dashboard_screen.dart';
 import 'presentation/screens/loan/loan_application_screen.dart';
 import 'presentation/screens/loan/guarantor_verification_screen.dart';
@@ -344,6 +345,7 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
             const KYCEmploymentDetailsScreen(),
         '/kyc-id-upload': (context) => const KYCIDUploadScreen(),
         '/kyc-selfie': (context) => const KYCSelfieScreen(),
+        '/kyc-next-of-kin': (context) => const KYCNextOfKinScreen(),
         '/kyc-bank-info': (context) => const KYCBankInfoScreen(),
         '/kyc-success': (context) => const KYCSuccessScreen(),
         '/kyc-complete': (context) => const KYCSuccessScreen(),

@@ -60,10 +60,14 @@ class KYCCubit extends StateNotifier<KYCState> {
     String? organizationName,
     String? jobTitle,
     String? monthlyIncomeRange,
+    String? occupation,
+    String? employerName,
+    String? workAddress,
+    String? yearsOfEmployment,
   }) {
     final current = state.submission;
     if (current == null) return;
-    
+
     state = state.copyWith(
       submission: current.copyWith(
         employmentType: employmentType ?? current.employmentType,
@@ -71,6 +75,10 @@ class KYCCubit extends StateNotifier<KYCState> {
         organizationName: organizationName,
         jobTitle: jobTitle ?? current.jobTitle,
         monthlyIncomeRange: monthlyIncomeRange ?? current.monthlyIncomeRange,
+        occupation: occupation ?? current.occupation,
+        employerName: employerName ?? current.employerName,
+        workAddress: workAddress ?? current.workAddress,
+        yearsOfEmployment: yearsOfEmployment ?? current.yearsOfEmployment,
       ),
     );
   }
@@ -81,16 +89,18 @@ class KYCCubit extends StateNotifier<KYCState> {
     String? city,
     String? stateValue,
     String? country,
+    String? lga,
   }) {
     final current = state.submission;
     if (current == null) return;
-    
+
     state = state.copyWith(
       submission: current.copyWith(
         residentialAddress: residentialAddress ?? current.residentialAddress,
         city: city,
         state: stateValue,
         country: country,
+        lga: lga ?? current.lga,
       ),
     );
   }
@@ -100,15 +110,37 @@ class KYCCubit extends StateNotifier<KYCState> {
     String? idType,
     String? idNumber,
     String? idPhotoPath,
+    String? staffId,
   }) {
     final current = state.submission;
     if (current == null) return;
-    
+
     state = state.copyWith(
       submission: current.copyWith(
         idType: idType ?? current.idType,
         idNumber: idNumber,
         idPhotoPath: idPhotoPath,
+        staffId: staffId ?? current.staffId,
+      ),
+    );
+  }
+
+  /// Update next of kin details
+  void updateNextOfKin({
+    String? nokName,
+    String? nokRelationship,
+    String? nokPhone,
+    String? nokAddress,
+  }) {
+    final current = state.submission;
+    if (current == null) return;
+
+    state = state.copyWith(
+      submission: current.copyWith(
+        nokName: nokName ?? current.nokName,
+        nokRelationship: nokRelationship ?? current.nokRelationship,
+        nokPhone: nokPhone ?? current.nokPhone,
+        nokAddress: nokAddress ?? current.nokAddress,
       ),
     );
   }

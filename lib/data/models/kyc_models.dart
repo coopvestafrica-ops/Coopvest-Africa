@@ -6,28 +6,41 @@ class KYCSubmission extends Equatable {
   // Personal Information
   final String? dateOfBirth;
   final String? gender;
-  
+
   // Employment Details
   final String employmentType;
   final String? organizationId;
   final String? organizationName;
   final String jobTitle;
   final String monthlyIncomeRange;
-  
+  // Extra employment fields (aligned with registration onboarding)
+  final String? occupation;
+  final String? employerName;
+  final String? workAddress;
+  final String? yearsOfEmployment;
+
   // Address
   final String residentialAddress;
   final String? city;
   final String? state;
+  final String? lga;
   final String? country;
-  
+
   // ID Document
   final String idType;
   final String? idNumber;
   final String? idPhotoPath;
-  
+  final String? staffId;
+
   // Selfie
   final String? selfiePhotoPath;
-  
+
+  // Next of Kin (aligned with registration onboarding)
+  final String? nokName;
+  final String? nokRelationship;
+  final String? nokPhone;
+  final String? nokAddress;
+
   // Bank Information
   final String? bankName;
   final String? bankCode;
@@ -35,7 +48,7 @@ class KYCSubmission extends Equatable {
   final String? accountName;
   final String? accountType;
   final String? bvn;
-  
+
   // Status
   final String status; // pending, submitted, approved, rejected
   final DateTime? submittedAt;
@@ -50,14 +63,24 @@ class KYCSubmission extends Equatable {
     this.organizationName,
     required this.jobTitle,
     required this.monthlyIncomeRange,
+    this.occupation,
+    this.employerName,
+    this.workAddress,
+    this.yearsOfEmployment,
     required this.residentialAddress,
     this.city,
     this.state,
+    this.lga,
     this.country,
     required this.idType,
     this.idNumber,
     this.idPhotoPath,
+    this.staffId,
     this.selfiePhotoPath,
+    this.nokName,
+    this.nokRelationship,
+    this.nokPhone,
+    this.nokAddress,
     this.bankName,
     this.bankCode,
     this.accountNumber,
@@ -79,14 +102,24 @@ class KYCSubmission extends Equatable {
       'organization_name': organizationName,
       'job_title': jobTitle,
       'monthly_income_range': monthlyIncomeRange,
+      'occupation': occupation,
+      'employer_name': employerName,
+      'work_address': workAddress,
+      'years_of_employment': yearsOfEmployment,
       'residential_address': residentialAddress,
       'city': city,
       'state': state,
+      'lga': lga,
       'country': country ?? 'Nigeria',
       'id_type': idType,
       'id_number': idNumber,
       'id_photo_path': idPhotoPath,
+      'staff_id': staffId,
       'selfie_photo_path': selfiePhotoPath,
+      'nok_name': nokName,
+      'nok_relationship': nokRelationship,
+      'nok_phone': nokPhone,
+      'nok_address': nokAddress,
       'bank_name': bankName,
       'bank_code': bankCode,
       'account_number': accountNumber,
@@ -106,14 +139,24 @@ class KYCSubmission extends Equatable {
       organizationName: json['organization_name'] as String?,
       jobTitle: json['job_title'] as String,
       monthlyIncomeRange: json['monthly_income_range'] as String,
+      occupation: json['occupation'] as String?,
+      employerName: json['employer_name'] as String?,
+      workAddress: json['work_address'] as String?,
+      yearsOfEmployment: json['years_of_employment'] as String?,
       residentialAddress: json['residential_address'] as String,
       city: json['city'] as String?,
       state: json['state'] as String?,
+      lga: json['lga'] as String?,
       country: json['country'] as String?,
       idType: json['id_type'] as String,
       idNumber: json['id_number'] as String?,
       idPhotoPath: json['id_photo_path'] as String?,
+      staffId: json['staff_id'] as String?,
       selfiePhotoPath: json['selfie_photo_path'] as String?,
+      nokName: json['nok_name'] as String?,
+      nokRelationship: json['nok_relationship'] as String?,
+      nokPhone: json['nok_phone'] as String?,
+      nokAddress: json['nok_address'] as String?,
       bankName: json['bank_name'] as String?,
       bankCode: json['bank_code'] as String?,
       accountNumber: json['account_number'] as String?,
@@ -139,14 +182,24 @@ class KYCSubmission extends Equatable {
     String? organizationName,
     String? jobTitle,
     String? monthlyIncomeRange,
+    String? occupation,
+    String? employerName,
+    String? workAddress,
+    String? yearsOfEmployment,
     String? residentialAddress,
     String? city,
     String? state,
+    String? lga,
     String? country,
     String? idType,
     String? idNumber,
     String? idPhotoPath,
+    String? staffId,
     String? selfiePhotoPath,
+    String? nokName,
+    String? nokRelationship,
+    String? nokPhone,
+    String? nokAddress,
     String? bankName,
     String? bankCode,
     String? accountNumber,
@@ -166,14 +219,24 @@ class KYCSubmission extends Equatable {
       organizationName: organizationName ?? this.organizationName,
       jobTitle: jobTitle ?? this.jobTitle,
       monthlyIncomeRange: monthlyIncomeRange ?? this.monthlyIncomeRange,
+      occupation: occupation ?? this.occupation,
+      employerName: employerName ?? this.employerName,
+      workAddress: workAddress ?? this.workAddress,
+      yearsOfEmployment: yearsOfEmployment ?? this.yearsOfEmployment,
       residentialAddress: residentialAddress ?? this.residentialAddress,
       city: city ?? this.city,
       state: state ?? this.state,
+      lga: lga ?? this.lga,
       country: country ?? this.country,
       idType: idType ?? this.idType,
       idNumber: idNumber ?? this.idNumber,
       idPhotoPath: idPhotoPath ?? this.idPhotoPath,
+      staffId: staffId ?? this.staffId,
       selfiePhotoPath: selfiePhotoPath ?? this.selfiePhotoPath,
+      nokName: nokName ?? this.nokName,
+      nokRelationship: nokRelationship ?? this.nokRelationship,
+      nokPhone: nokPhone ?? this.nokPhone,
+      nokAddress: nokAddress ?? this.nokAddress,
       bankName: bankName ?? this.bankName,
       bankCode: bankCode ?? this.bankCode,
       accountNumber: accountNumber ?? this.accountNumber,
@@ -189,21 +252,61 @@ class KYCSubmission extends Equatable {
 
   bool get isComplete {
     return dateOfBirth != null &&
+        gender != null &&
         employmentType.isNotEmpty &&
         organizationName != null &&
         jobTitle.isNotEmpty &&
         monthlyIncomeRange.isNotEmpty &&
         residentialAddress.isNotEmpty &&
+        state != null &&
         idType.isNotEmpty &&
         idNumber != null &&
         idPhotoPath != null &&
         selfiePhotoPath != null &&
+        nokName != null &&
+        nokRelationship != null &&
+        nokPhone != null &&
         bankName != null &&
         bankCode != null &&
         accountNumber != null &&
         accountName != null &&
         accountType != null &&
         bvn != null;
+  }
+
+  /// Returns the names of required KYC sections that still have missing
+  /// values, in flow order. Used by the "Complete KYC" entry to jump the
+  /// member straight to the first incomplete step (so only missing data is
+  /// asked for).
+  List<String> get missingSections {
+    final missing = <String>[];
+    if (dateOfBirth == null ||
+        gender == null ||
+        residentialAddress.isEmpty ||
+        state == null ||
+        employmentType.isEmpty ||
+        organizationName == null ||
+        jobTitle.isEmpty ||
+        monthlyIncomeRange.isEmpty) {
+      missing.add('employment');
+    }
+    if (idType.isEmpty ||
+        idNumber == null ||
+        idPhotoPath == null ||
+        selfiePhotoPath == null) {
+      missing.add('identification');
+    }
+    if (nokName == null || nokRelationship == null || nokPhone == null) {
+      missing.add('nextOfKin');
+    }
+    if (bankName == null ||
+        accountNumber == null ||
+        accountName == null ||
+        accountType == null ||
+        bvn == null) {
+      missing.add('bank');
+    }
+    return missing;
   }
 
   @override
@@ -215,14 +318,24 @@ class KYCSubmission extends Equatable {
     organizationName,
     jobTitle,
     monthlyIncomeRange,
+    occupation,
+    employerName,
+    workAddress,
+    yearsOfEmployment,
     residentialAddress,
     city,
     state,
+    lga,
     country,
     idType,
     idNumber,
     idPhotoPath,
+    staffId,
     selfiePhotoPath,
+    nokName,
+    nokRelationship,
+    nokPhone,
+    nokAddress,
     bankName,
     bankCode,
     accountNumber,

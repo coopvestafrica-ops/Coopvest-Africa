@@ -28,7 +28,13 @@ class _KYCEmploymentDetailsScreenState
   late TextEditingController _jobTitleController;
   late TextEditingController _addressController;
   late TextEditingController _organizationSearchController;
-  
+  // Extra employment fields (aligned with registration onboarding)
+  late TextEditingController _occupationController;
+  late TextEditingController _employerNameController;
+  late TextEditingController _workAddressController;
+  late TextEditingController _yearsOfEmploymentController;
+  late TextEditingController _lgaController;
+
   String? _selectedEmploymentType;
   String? _selectedOrganization;
   String? _selectedIncomeRange;
@@ -107,12 +113,103 @@ class _KYCEmploymentDetailsScreenState
     _jobTitleController = TextEditingController();
     _addressController = TextEditingController();
     _organizationSearchController = TextEditingController();
+    _occupationController = TextEditingController();
+    _employerNameController = TextEditingController();
+    _workAddressController = TextEditingController();
+    _yearsOfEmploymentController = TextEditingController();
+    _lgaController = TextEditingController();
     _organizationSearchController.addListener(_onOrganizationSearch);
-    
+
     _filteredOrganizations = _preApprovedOrganizations
         .expand((cat) => cat['organizations'] as List)
         .cast<String>()
         .toList();
+
+    // Make sure we have the member's existing KYC loaded so we can pre-fill
+    // already-saved data and skip steps that are already complete.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Re-run the pre-fill/skip logic whenever the KYC state transitions to
+      // 'loaded' (e.g. after the initializeKYC() call we trigger here).
+      ref.listenManual(kycProvider, (prev, next) {
+        if (next.status == KYCStatus.loaded &&
+            (prev == null || prev.status != KYCStatus.loaded)) {
+          _loadExistingAndMaybeSkip();
+        }
+      });
+      _loadExistingAndMaybeSkip();
+    });
+  }
+
+  /// Pre-fill the form from any existing KYC submission and, if every field
+  /// on this step is already present, jump straight to the next incomplete
+  /// step (so the member is only asked for data that's actually missing).
+  void _loadExistingAndMaybeSkip() {
+    final kycState = ref.read(kycProvider);
+    if (kycState.status == KYCStatus.initial ||
+        kycState.status == KYCStatus.loading) {
+      // Trigger a load; the listener above will re-run us when it completes.
+      ref.read(kycProvider.notifier).initializeKYC();
+      return;
+    }
+
+    final sub = kycState.submission;
+    if (sub == null) {
+      // No existing submission — start fresh.
+      return;
+    }
+
+    setState(() {
+      _selectedEmploymentType =
+          sub.employmentType.isNotEmpty ? sub.employmentType : null;
+      _selectedOrganization = sub.organizationName;
+      _jobTitleController.text = sub.jobTitle;
+      _selectedIncomeRange =
+          sub.monthlyIncomeRange.isNotEmpty ? sub.monthlyIncomeRange : null;
+      _dateOfBirthController.text = sub.dateOfBirth ?? '';
+      _selectedGender = sub.gender;
+      _addressController.text = sub.residentialAddress;
+      _selectedCity = sub.city;
+      _selectedState = sub.state;
+      // New aligned fields
+      _occupationController.text = sub.occupation ?? '';
+      _employerNameController.text = sub.employerName ?? '';
+      _workAddressController.text = sub.workAddress ?? '';
+      _yearsOfEmploymentController.text = sub.yearsOfEmployment ?? '';
+      _lgaController.text = sub.lga ?? '';
+    });
+
+    // If this whole step is already complete, skip forward to the first
+    // incomplete step.
+    if (_isStepComplete(sub)) {
+      _skipToNextIncompleteStep(sub);
+    }
+  }
+
+  bool _isStepComplete(KYCSubmission sub) {
+    return sub.employmentType.isNotEmpty &&
+        sub.organizationName != null &&
+        sub.jobTitle.isNotEmpty &&
+        sub.monthlyIncomeRange.isNotEmpty &&
+        sub.dateOfBirth != null &&
+        sub.residentialAddress.isNotEmpty &&
+        sub.state != null;
+  }
+
+  /// Navigate to the first KYC section that still has missing data, in flow
+  /// order: employment → identification → next-of-kin → bank → success.
+  void _skipToNextIncompleteStep(KYCSubmission sub) {
+    final missing = sub.missingSections;
+    if (missing.isEmpty || missing.first == 'employment') {
+      return; // stay here (or nothing missing — shouldn't reach via this entry)
+    }
+    final route = {
+      'identification': '/kyc-id-upload',
+      'nextOfKin': '/kyc-next-of-kin',
+      'bank': '/kyc-bank-info',
+    }[missing.first];
+    if (route != null) {
+      Navigator.of(context).pushReplacementNamed(route);
+    }
   }
 
   @override
@@ -121,6 +218,11 @@ class _KYCEmploymentDetailsScreenState
     _jobTitleController.dispose();
     _addressController.dispose();
     _organizationSearchController.dispose();
+    _occupationController.dispose();
+    _employerNameController.dispose();
+    _workAddressController.dispose();
+    _yearsOfEmploymentController.dispose();
+    _lgaController.dispose();
     super.dispose();
   }
 
@@ -213,6 +315,18 @@ class _KYCEmploymentDetailsScreenState
       organizationName: _selectedOrganization,
       jobTitle: _jobTitleController.text,
       monthlyIncomeRange: _selectedIncomeRange,
+      occupation: _occupationController.text.trim().isEmpty
+          ? null
+          : _occupationController.text.trim(),
+      employerName: _employerNameController.text.trim().isEmpty
+          ? null
+          : _employerNameController.text.trim(),
+      workAddress: _workAddressController.text.trim().isEmpty
+          ? null
+          : _workAddressController.text.trim(),
+      yearsOfEmployment: _yearsOfEmploymentController.text.trim().isEmpty
+          ? null
+          : _yearsOfEmploymentController.text.trim(),
     );
 
     ref.read(kycProvider.notifier).updatePersonalDetails(
@@ -224,6 +338,7 @@ class _KYCEmploymentDetailsScreenState
       residentialAddress: _addressController.text,
       city: _selectedCity,
       stateValue: _selectedState,
+      lga: _lgaController.text.trim().isEmpty ? null : _lgaController.text.trim(),
     );
 
     // Navigate to next step
@@ -385,6 +500,40 @@ class _KYCEmploymentDetailsScreenState
               ),
               const SizedBox(height: 20),
 
+              // Occupation (aligned with registration)
+              AppTextField(
+                label: 'Occupation',
+                hint: 'Enter your occupation',
+                controller: _occupationController,
+              ),
+              const SizedBox(height: 20),
+
+              // Employer name
+              AppTextField(
+                label: 'Employer Name',
+                hint: 'Enter your employer / organization name',
+                controller: _employerNameController,
+              ),
+              const SizedBox(height: 20),
+
+              // Work address
+              AppTextField(
+                label: 'Work Address',
+                hint: 'Enter your work address',
+                controller: _workAddressController,
+                maxLines: 2,
+              ),
+              const SizedBox(height: 20),
+
+              // Years of employment
+              AppTextField(
+                label: 'Years of Employment',
+                hint: 'e.g. 3',
+                controller: _yearsOfEmploymentController,
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 20),
+
               // Address Section
               Text(
                 'Residential Address',
@@ -398,6 +547,14 @@ class _KYCEmploymentDetailsScreenState
                 hint: 'Enter your full residential address',
                 controller: _addressController,
                 maxLines: 2,
+              ),
+              const SizedBox(height: 20),
+
+              // LGA (aligned with registration)
+              AppTextField(
+                label: 'LGA',
+                hint: 'Enter your Local Government Area',
+                controller: _lgaController,
               ),
               const SizedBox(height: 20),
 
