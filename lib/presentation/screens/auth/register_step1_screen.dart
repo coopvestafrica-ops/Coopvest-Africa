@@ -257,7 +257,18 @@ class _RegisterStep1ScreenState extends ConsumerState<RegisterStep1Screen> {
         elevation: 0,
         leading: IconButton(
           icon: Icon(Icons.arrow_back, color: context.iconPrimary),
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () {
+            // The Create Account screen can be reached two ways:
+            //   1. From Welcome "Create Account" via pushReplacementNamed('/register')
+            //      — this leaves nothing to pop back to (empty nav stack), which
+            //        previously produced a blank screen. In that case route to /welcome.
+            //   2. From Login "Sign Up" via pushNamed('/register') — safe to pop.
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else {
+              Navigator.of(context).pushReplacementNamed('/welcome');
+            }
+          },
         ),
         title: Text('Create Account',
             style: TextStyle(
