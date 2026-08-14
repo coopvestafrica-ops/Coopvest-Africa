@@ -198,6 +198,10 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
     if (state == AppLifecycleState.resumed && _wasPaused) {
       _wasPaused = false;
       _checkBiometricOnResume();
+      // Re-fetch admin-controlled feature flags so toggles made in the
+      // admin dashboard while the app was backgrounded take effect right
+      // away instead of waiting for the next periodic refresh.
+      FeatureService().refreshOnResume();
     }
   }
 

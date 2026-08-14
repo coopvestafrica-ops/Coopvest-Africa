@@ -5,6 +5,7 @@ import '../../../config/app_config.dart';
 import '../../../config/theme_config.dart';
 import '../../../config/theme_extension.dart';
 import '../../../core/extensions/number_extensions.dart';
+import '../../widgets/common/feature_gate.dart';
 import '../../../presentation/providers/auth_provider.dart';
 import '../../../presentation/providers/loan_provider.dart';
 import '../../../presentation/providers/wallet_provider.dart';
@@ -24,6 +25,11 @@ class LoanEligibilityCard extends ConsumerWidget {
     final user = ref.watch(currentUserProvider);
     final walletState = ref.watch(walletProvider);
     final loanNotifier = ref.read(loanProvider.notifier);
+    // Honour the admin-controlled "Loan Requests" toggle (Mobile App Content
+    // Control). When disabled, the Apply button is hidden so toggles actually
+    // take effect on the mobile app.
+    final featureService = ref.read(featureServiceProvider);
+    final loansEnabled = featureService.isEnabled('loan_requests');
 
     final monthsDone = user?.membershipDurationMonths ?? 0;
     final monthsRequired = AppConfig.loanEligibilityMonths;
@@ -321,7 +327,7 @@ class LoanEligibilityCard extends ConsumerWidget {
           ),
 
           // ── CTA ──────────────────────────────────────────────────────────
-          if (isEligible && onApplyTap != null) ...[
+          if (isEligible && loansEnabled && onApplyTap != null) ...[
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
@@ -338,6 +344,28 @@ class LoanEligibilityCard extends ConsumerWidget {
                   ),
                   elevation: 0,
                 ),
+              ),
+            ),
+          ] else if (isEligible && !loansEnabled) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: CoopvestColors.warning.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: CoopvestColors.warning.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.lock_outline, size: 18, color: CoopvestColors.warning),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      'Loan applications are temporarily disabled by the administrator.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

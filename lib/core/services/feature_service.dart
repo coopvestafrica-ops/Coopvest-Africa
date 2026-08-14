@@ -12,15 +12,21 @@ class FeatureService {
 
   final String _baseUrl = 'https://coopvest-api.onrender.com/api';
   static const String _cacheKey = 'feature_flags_cache';
-  static const Duration _cacheDuration = Duration(hours: 1);
+  // Short cache so admin toggles are reflected quickly. Previously 1 hour,
+  // which meant a toggle made in the admin dashboard could take up to an
+  // hour to affect the mobile app even after a refresh.
+  static const Duration _cacheDuration = Duration(minutes: 2);
   
   final Map<String, FeatureFlag> _features = {};
   Timer? _refreshTimer;
   bool _isInitialized = false;
 
-  // Feature flag definitions
+  // Feature flag definitions. Keys mirror the `id` values seeded by the
+  // backend migration (backend/migrations/011_mobile_features.sql) and
+  // returned as `name` by GET /api/features/platform/mobile, so toggles made
+  // in the admin dashboard resolve to the same flag here.
   static const Map<String, String> featureNames = {
-    'loan_application': 'Loan Application',
+    'loan_requests': 'Loan Requests',
     'guarantor_system': 'Guarantor System',
     'qr_verification': 'QR Code Verification',
     'two_factor_auth': 'Two Factor Authentication',
@@ -28,11 +34,16 @@ class FeatureService {
     'push_notifications': 'Push Notifications',
     'email_notifications': 'Email Notifications',
     'referral_program': 'Referral Program',
-    'investment_features': 'Investment Features',
+    'investment_pool': 'Investment Pool',
     'offline_mode': 'Offline Mode',
     'biometric_login': 'Biometric Login',
     'salary_deduction': 'Salary Deduction',
     'rollover_requests': 'Rollover Requests',
+    'direct_contribution': 'Direct Contribution',
+    'wallet_transfers': 'Wallet Transfers',
+    'withdrawals': 'Withdrawals',
+    'kyc_verification': 'KYC Verification',
+    'registration': 'Registration',
     'risk_scoring': 'Risk Scoring',
     'compliance_tools': 'Compliance Tools',
   };
@@ -51,7 +62,9 @@ class FeatureService {
   void _startAutoRefresh() {
     _refreshTimer?.cancel();
     _refreshTimer = Timer.periodic(
-      const Duration(minutes: 5),
+      // Refresh frequently so admin-side toggles propagate to the app without
+      // waiting for a full app restart.
+      const Duration(minutes: 2),
       (_) => _fetchFeatures(),
     );
   }
@@ -59,6 +72,15 @@ class FeatureService {
   /// Stop auto-refresh
   void dispose() {
     _refreshTimer?.cancel();
+  }
+
+  /// Force a fresh fetch from the backend, bypassing the cache. Called on app
+  /// resume so toggles made while the app was backgrounded take effect
+  /// immediately. Safe to call repeatedly; never throws.
+  Future<void> refreshOnResume() async {
+    // Ignore the in-memory cache but keep using the last-known flags until the
+    // fetch completes so the UI doesn't flicker to "disabled".
+    await _fetchFeatures();
   }
 
   /// Load features from local cache
@@ -123,10 +145,15 @@ class FeatureService {
     }
   }
 
-  /// Check if a feature is enabled
+  /// Check if a feature is enabled.
+  ///
+  /// Unknown features default to **enabled** (fail-open) so a transient
+  /// backend failure never locks members out of core flows. The admin
+  /// dashboard explicitly seeds the flags it wants disabled, so a missing
+  /// flag almost always means "not fetched yet", not "intentionally off".
   bool isEnabled(String featureName) {
     final flag = _features[featureName];
-    return flag?.enabled ?? false;
+    return flag?.enabled ?? true;
   }
 
   /// Get feature flag details
@@ -243,14 +270,18 @@ class FeatureFlag {
 
 /// Extension methods for common feature checks
 extension FeatureExtensions on FeatureService {
-  bool get loansEnabled => isEnabled('loan_application');
+  bool get loansEnabled => isEnabled('loan_requests');
   bool get guarantorEnabled => isEnabled('guarantor_system');
   bool get qrEnabled => isEnabled('qr_verification');
   bool get biometricEnabled => isEnabled('biometric_login');
   bool get referralEnabled => isEnabled('referral_program');
-  bool get investmentEnabled => isEnabled('investment_features');
+  bool get investmentEnabled => isEnabled('investment_pool');
   bool get offlineEnabled => isEnabled('offline_mode');
   bool get rolloverEnabled => isEnabled('rollover_requests');
   bool get pushEnabled => isEnabled('push_notifications');
   bool get emailEnabled => isEnabled('email_notifications');
+  bool get withdrawalsEnabled => isEnabled('withdrawals');
+  bool get directContributionEnabled => isEnabled('direct_contribution');
+  bool get walletTransfersEnabled => isEnabled('wallet_transfers');
+  bool get registrationEnabled => isEnabled('registration');
 }

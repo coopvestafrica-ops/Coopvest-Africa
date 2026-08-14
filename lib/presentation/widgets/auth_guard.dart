@@ -62,6 +62,47 @@ class _AuthGuardState extends ConsumerState<AuthGuard> {
       );
     }
 
+    // If the KYC fetch failed (e.g. a transient backend error / cold start on
+    // Render), do NOT assume the member hasn't submitted. Falling back to the
+    // KYC flow here used to re-prompt KYC on every loan application for
+    // members who had already completed it. Trust the profile's kycStatus
+    // returned by /auth/me instead; only prompt if that also says pending.
+    if (kycState.status == KYCStatus.error) {
+      final profileStatus = (user?.kycStatus ?? '').toLowerCase();
+      final profileSubmitted = profileStatus == 'submitted' ||
+          profileStatus == 'approved' ||
+          profileStatus == 'verified' ||
+          profileStatus == 'in_review' ||
+          profileStatus == 'rejected';
+      if (profileSubmitted) {
+        return widget.child;
+      }
+      // Profile itself says pending AND we couldn't confirm via the KYC
+      // endpoint — show a retryable error rather than forcing the flow.
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off, size: 40),
+              const SizedBox(height: 12),
+              const Text('Could not verify your KYC status.'),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () {
+                  _kycInitialized = false;
+                  if (mounted) {
+                    ref.read(kycProvider.notifier).initializeKYC();
+                  }
+                },
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final submitted = _hasSubmittedKyc(kycState);
     if (!submitted) {
       // Member hasn't submitted KYC yet — guide them through it.

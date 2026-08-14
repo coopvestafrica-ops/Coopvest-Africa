@@ -80,16 +80,13 @@ class KYCRepository {
       );
     } catch (e) {
       logger.e('Get KYC status error: $e');
-      // Return a pending submission instead of throwing so the UI can still
-      // render and offer the user a chance to complete their KYC.
-      return const KYCSubmission(
-        employmentType: '',
-        jobTitle: '',
-        monthlyIncomeRange: '',
-        residentialAddress: '',
-        idType: '',
-        status: 'pending',
-      );
+      // Re-throw so the KYC provider can surface an error state. Previously
+      // this returned a fabricated KYCSubmission with status='pending', which
+      // made AuthGuard believe the member had never submitted KYC and forced
+      // them back into the KYC flow on every transient backend failure (e.g.
+      // Render cold starts). AuthGuard now treats an unknown/error state as
+      // "do not prompt" rather than "not submitted".
+      rethrow;
     }
   }
 
