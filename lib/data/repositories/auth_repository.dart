@@ -269,7 +269,15 @@ class AuthRepository {
     }
   }
 
-  /// Get current user (with caching)
+  /// Get current user (with caching).
+  ///
+  /// On a transient backend failure (e.g. Render cold start, flaky mobile
+  /// network), we must NOT fabricate a User with `kycStatus: 'pending'` and
+  /// `registrationCompleted: false`. Doing so made AuthGuard believe the member
+  /// had never registered/submitted KYC and re-prompted the login,
+  /// onboarding, and KYC flows on every cold launch. Instead, prefer the last
+  /// successfully cached profile; only fall back to a minimal Supabase-derived
+  /// User (preserving any known KYC/registration state) when no cache exists.
   Future<User> getCurrentUser({bool forceRefresh = false}) async {
     if (!forceRefresh && _cachedUser != null) return _cachedUser!;
 
@@ -285,9 +293,21 @@ class AuthRepository {
     } catch (e) {
       logger.w('Get current user from backend failed: $e');
 
+      // Serve the last known-good profile so a transient backend hiccup does
+      // not kick the member out of their session or re-trigger KYC.
+      if (_cachedUser != null) {
+        return _cachedUser!;
+      }
+
       final sbUser = _supabase.auth.currentUser;
       if (sbUser != null) {
         final meta = sbUser.userMetadata ?? {};
+        // Preserve KYC/registration signals from Supabase metadata when
+        // present; default to 'unknown' (not 'pending') so AuthGuard treats a
+        // backend outage as "indeterminate" rather than "not submitted".
+        final metaKyc = (meta['kyc_status'] ?? meta['kycStatus']) as String?;
+        final metaReg = (meta['registration_completed'] ??
+            meta['registrationCompleted']) as bool?;
         _cachedUser = User(
           id: sbUser.id,
           name: meta['name'] as String? ??
@@ -296,7 +316,10 @@ class AuthRepository {
           email: sbUser.email ?? '',
           phone: meta['phone'] as String?,
           isEmailVerified: sbUser.emailConfirmedAt != null,
-          kycStatus: 'pending',
+          kycStatus: (metaKyc != null && metaKyc.isNotEmpty)
+              ? metaKyc
+              : 'unknown',
+          registrationCompleted: metaReg ?? false,
           createdAt: DateTime.now(),
         );
         return _cachedUser!;

@@ -63,18 +63,27 @@ class _AuthGuardState extends ConsumerState<AuthGuard> {
     }
 
     // If the KYC fetch failed (e.g. a transient backend error / cold start on
-    // Render), do NOT assume the member hasn't submitted. Falling back to the
-    // KYC flow here used to re-prompt KYC on every loan application for
-    // members who had already completed it. Trust the profile's kycStatus
-    // returned by /auth/me instead; only prompt if that also says pending.
+    // Render), do NOT dead-end the member on a "Could not verify" screen.
+    // Previously this blocked the app whenever /kyc/status timed out, even for
+    // members whose KYC was already submitted/approved. Instead, trust the
+    // profile's kycStatus returned by /auth/me: if it indicates the member has
+    // submitted (or we simply cannot tell), let them through to the dashboard
+    // and retry the KYC fetch in the background. Only prompt for KYC when the
+    // profile itself explicitly says 'pending'.
     if (kycState.status == KYCStatus.error) {
       final profileStatus = (user?.kycStatus ?? '').toLowerCase();
       final profileSubmitted = profileStatus == 'submitted' ||
           profileStatus == 'approved' ||
           profileStatus == 'verified' ||
           profileStatus == 'in_review' ||
-          profileStatus == 'rejected';
+          profileStatus == 'rejected' ||
+          profileStatus == 'unknown'; // backend unreachable — don't block
       if (profileSubmitted) {
+        // Retry the KYC fetch in the background so the submission status
+        // refreshes once the backend is reachable again, without blocking UI.
+        Future.microtask(() {
+          if (mounted) ref.read(kycProvider.notifier).initializeKYC();
+        });
         return widget.child;
       }
       // Profile itself says pending AND we couldn't confirm via the KYC
