@@ -67,8 +67,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       
       setState(() {
         _isBiometricAvailable = canAuthenticate || isDeviceSupported;
-        // Show biometric option if: enabled in settings AND (has stored creds OR has valid session)
-        _isBiometricEnabled = _isBiometricAvailable && (isEnabled || hasSession);
+        // Only show the biometric login button when the user has explicitly
+        // enabled it in Security Settings. Previously this also showed when a
+        // session existed but biometrics were not enabled, which let users tap
+        // through to a restored session without having configured biometrics.
+        _isBiometricEnabled = _isBiometricAvailable && isEnabled;
       });
       
       // If biometric is available and user has a valid session, prompt automatically

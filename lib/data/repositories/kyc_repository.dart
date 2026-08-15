@@ -182,61 +182,51 @@ class KYCRepository {
     }
   }
 
-  /// Upload ID document
+  /// Upload ID document photo via the dedicated multipart KYC upload route.
   ///
-  /// The backend does not expose a dedicated multipart KYC upload. We reuse the
-  /// wallet proof upload endpoint (which returns a public storage URL) and then
-  /// register the document against the KYC record via POST /kyc/document.
-  Future<String> uploadIDDocument(String filePath) async {
-    try {
-      final url = await _uploadFileToStorage(filePath);
-      await _apiClient.post(
-        '/kyc/document',
-        data: {
-          'type': 'id_document',
-          'url': url,
-        },
-      );
-      return url;
-    } catch (e) {
-      logger.e('Upload ID document error: $e');
-      rethrow;
-    }
+  /// The backend uploads the file to the private `kyc-documents` Supabase
+  /// Storage bucket, records it against `kyc_documents.front_image_url`
+  /// (or `back_image_url` when [side] is 'back'), and returns a signed URL.
+  Future<String> uploadIDDocument(String filePath, {String side = 'front'}) async {
+    return _uploadKycImage(filePath, type: 'id_document', side: side);
   }
 
-  /// Upload selfie
+  /// Upload selfie via the dedicated multipart KYC upload route.
+  ///
+  /// The backend stores the file in the `kyc-documents` bucket and records the
+  /// signed URL in the `kyc.selfie` JSONB column.
   Future<String> uploadSelfie(String filePath) async {
-    try {
-      final url = await _uploadFileToStorage(filePath);
-      await _apiClient.post(
-        '/kyc/selfie',
-        data: {'url': url},
-      );
-      return url;
-    } catch (e) {
-      logger.e('Upload selfie error: $e');
-      rethrow;
-    }
+    return _uploadKycImage(filePath, type: 'selfie');
   }
 
-  /// Uploads a file via the wallet proof upload endpoint and returns the
-  /// public storage URL. Falls back to returning the local path if the upload
-  /// fails so the caller can still proceed.
-  Future<String> _uploadFileToStorage(String filePath) async {
+  /// Uploads a KYC image (selfie or id_document) to POST /kyc/upload.
+  ///
+  /// Unlike the old implementation, this does NOT fall back to a local device
+  /// path on failure — doing so made the KYC flow silently "succeed" while no
+  /// image was ever stored (the local path is meaningless to the backend).
+  /// Instead, failures are surfaced to the caller so the user is asked to
+  /// retry, and the KYC submission is not marked complete with a missing photo.
+  Future<String> _uploadKycImage(String filePath,
+      {required String type, String side = 'front'}) async {
     try {
       final formData = FormData.fromMap({
-        'proof': await MultipartFile.fromFile(filePath),
+        'file': await MultipartFile.fromFile(filePath),
+        'type': type,
+        if (type == 'id_document') 'side': side,
       });
       final response = await _apiClient.post(
-        '/wallet/upload-proof',
+        '/kyc/upload',
         data: formData,
       );
       final url = (response is Map ? response['url'] : null)?.toString();
-      if (url != null && url.isNotEmpty) return url;
+      if (url == null || url.isEmpty) {
+        throw Exception('Upload succeeded but no URL was returned by the server.');
+      }
+      return url;
     } catch (e) {
-      logger.e('KYC file upload failed, using local path: $e');
+      logger.e('KYC $type upload failed: $e');
+      rethrow;
     }
-    return filePath;
   }
 
   /// Upload avatar/profile picture
