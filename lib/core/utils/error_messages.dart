@@ -26,7 +26,7 @@ class ErrorMessages {
   static const String paymentCancelled = 'Payment was cancelled. No charges were made to your account.';
 
   // Loan errors
-  static const String loanNotEligible = 'You are not eligible for a loan at this time. Please ensure your membership is active and KYC is verified.';
+  static const String loanNotEligible = 'You are not eligible for a loan at this time. Please ensure your membership and contribution requirements are met.';
   static const String loanAmountTooHigh = 'The requested loan amount exceeds your eligibility. Please reduce the amount.';
   static const String guarantorRequired = 'Please add the required number of guarantors before submitting your loan application.';
 
