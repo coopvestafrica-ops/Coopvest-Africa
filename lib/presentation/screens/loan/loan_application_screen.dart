@@ -9,7 +9,6 @@ import '../../../core/network/api_client.dart';
 import '../../../data/models/referral_models.dart';
 import '../../../presentation/providers/auth_provider.dart';
 import '../../../presentation/providers/contributions/contribution_provider.dart';
-import '../../../presentation/providers/kyc_provider.dart';
 import '../../../presentation/providers/referral_provider.dart';
 import '../../../presentation/providers/wallet_provider.dart';
 import '../../../presentation/widgets/common/buttons.dart';
@@ -50,8 +49,6 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(walletProvider.notifier).loadWallet();
       ref.read(contributionProvider.notifier).loadContributions();
-      // Refresh KYC status so we can gate the application on completion.
-      ref.read(kycProvider.notifier).initializeKYC();
     });
   }
 
@@ -478,41 +475,6 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
   }
 
   Future<void> _submitApplication() async {
-    // Gate: members must have submitted their KYC before applying for a loan.
-    // The cached KYC submission may be stale or null if the KYC fetch failed
-    // on a cold launch (Render cold start / flaky network). Before hard-
-    // blocking the member, refresh the KYC status once; if it still can't be
-    // confirmed, fall back to the profile's kycStatus from /auth/me so a
-    // transient backend hiccup doesn't lock members who have already
-    // submitted out of applying for a loan.
-    bool kycSubmitted = ref.read(isKycSubmittedProvider);
-    if (!kycSubmitted) {
-      try {
-        await ref.read(kycProvider.notifier).initializeKYC();
-      } catch (_) {
-        // initializeKYC swallows errors into state; ignore here.
-      }
-      kycSubmitted = ref.read(isKycSubmittedProvider);
-    }
-    if (!kycSubmitted) {
-      final profileStatus =
-          (ref.read(authProvider).user?.kycStatus ?? '').toLowerCase();
-      final profileAllows = profileStatus == 'submitted' ||
-          profileStatus == 'approved' ||
-          profileStatus == 'verified' ||
-          profileStatus == 'in_review';
-      if (!profileAllows) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Please complete your KYC before applying for a loan. Go to Profile → Complete KYC to finish verification.'),
-            backgroundColor: Colors.red,
-            duration: Duration(seconds: 5),
-          ),
-        );
-        return;
-      }
-    }
-
     // First check if user is eligible for loan
     final eligibility = _checkLoanEligibility();
     if (!(eligibility['isEligible'] as bool)) {
