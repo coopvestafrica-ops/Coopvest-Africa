@@ -134,7 +134,54 @@ async function recordTransaction(profileId, row) {
 router.get('/balance', authenticate, async (req, res) => {
   try {
     const wallet = await ensureWallet(req.user.id);
-    res.json({ success: true, balance: Number(wallet.balance), currency: wallet.currency });
+
+    // Enrich with savings totals so the mobile dashboard's Savings card and
+    // Insights can show real data (the mobile parser reads total_savings and
+    // total_contributions). Best-effort: never fail the balance call if the
+    // savings row is missing.
+    let totalSavings = 0;
+    let totalContributions = 0;
+    let monthlySavings = 0;
+    let consecutiveMonths = 0;
+    try {
+      const { data: savings } = await supabase
+        .from('savings')
+        .select('total_saved, monthly_savings, consecutive_months')
+        .eq('profile_id', req.user.id)
+        .maybeSingle();
+      if (savings) {
+        totalSavings = Number(savings.total_saved) || 0;
+        monthlySavings = Number(savings.monthly_savings) || 0;
+        consecutiveMonths = Number(savings.consecutive_months) || 0;
+      }
+    } catch (sErr) {
+      logger.warn('wallet balance: savings lookup failed:', sErr.message);
+    }
+
+    try {
+      const { data: contribRows } = await supabase
+        .from('contributions')
+        .select('amount, status')
+        .eq('profile_id', req.user.id)
+        .in('status', ['completed', 'successful', 'approved']);
+      totalContributions = (contribRows || []).reduce(
+        (sum, c) => sum + (Number(c.amount) || 0),
+        0,
+      );
+    } catch (cErr) {
+      logger.warn('wallet balance: contributions lookup failed:', cErr.message);
+    }
+
+    res.json({
+      success: true,
+      balance: Number(wallet.balance),
+      currency: wallet.currency || 'NGN',
+      total_savings: totalSavings,
+      total_contributions: totalContributions,
+      monthly_savings: monthlySavings,
+      consecutive_months: consecutiveMonths,
+      available_for_withdrawal: Number(wallet.balance),
+    });
   } catch (err) {
     logger.error('wallet balance error:', err);
     res.status(500).json({ success: false, error: err.message });

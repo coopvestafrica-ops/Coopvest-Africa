@@ -283,19 +283,29 @@ class ContributionSummary extends Equatable {
   });
 
   factory ContributionSummary.fromJson(Map<String, dynamic> json) {
+    // The backend /contributions/summary returns camelCase keys
+    // (totalThisMonth, totalThisYear, lifetimeContributions,
+    // expectedMonthlyAmount, contributionStatus). Support both camelCase and
+    // snake_case so a mismatched case never silently falls back to mock data.
+    double _asDouble(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString()) ?? 0.0;
+    }
+
     return ContributionSummary(
-      totalThisMonth: (json['total_this_month'] as num).toDouble(),
-      totalThisYear: (json['total_this_year'] as num).toDouble(),
-      lifetimeContributions: (json['lifetime_contributions'] as num).toDouble(),
-      expectedMonthlyAmount: (json['expected_monthly_amount'] as num).toDouble(),
-      contributionStatus: json['contribution_status'] as String? ?? 'up_to_date',
-      monthsContributed: json['months_contributed'] as int? ?? 0,
-      totalContributionsCount: json['total_contributions_count'] as int? ?? 0,
-      pendingAmount: json['pending_amount'] != null
-          ? (json['pending_amount'] as num).toDouble()
+      totalThisMonth: _asDouble(json['totalThisMonth'] ?? json['total_this_month']),
+      totalThisYear: _asDouble(json['totalThisYear'] ?? json['total_this_year']),
+      lifetimeContributions: _asDouble(json['lifetimeContributions'] ?? json['lifetime_contributions']),
+      expectedMonthlyAmount: _asDouble(json['expectedMonthlyAmount'] ?? json['expected_monthly_amount']),
+      contributionStatus: (json['contributionStatus'] ?? json['contribution_status'] ?? 'pending') as String,
+      monthsContributed: (json['monthsContributed'] ?? json['months_contributed'] ?? 0) as int,
+      totalContributionsCount: (json['totalContributionsCount'] ?? json['total_contributions_count'] ?? 0) as int,
+      pendingAmount: json['pendingAmount'] != null || json['pending_amount'] != null
+          ? _asDouble(json['pendingAmount'] ?? json['pending_amount'])
           : null,
-      overdueAmount: json['overdue_amount'] != null
-          ? (json['overdue_amount'] as num).toDouble()
+      overdueAmount: json['overdueAmount'] != null || json['overdue_amount'] != null
+          ? _asDouble(json['overdueAmount'] ?? json['overdue_amount'])
           : null,
     );
   }

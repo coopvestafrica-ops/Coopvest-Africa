@@ -418,6 +418,75 @@ router.post(
       // 2. Update savings balance
       // 3. Create transaction record
       // 4. Create digital receipt
+      //
+      // Loan repayments are NOT handled by the trigger (it only creates a
+      // receipt for loan_repayment). Apply the balance effect here so that an
+      // admin-confirmed "loan repayment" actually reduces what the member owes.
+      // Idempotent: guarded by an existing loan_repayments row for this proof.
+      if (proof.payment_type === 'loan_repayment') {
+        try {
+          const proofId = proof.id;
+          const { data: alreadyApplied } = await supabase
+            .from('loan_repayments')
+            .select('id')
+            .eq('reference', proofId)
+            .maybeSingle();
+
+          if (!alreadyApplied) {
+            const repaymentAmount = parseFloat(proof.amount) || 0;
+            // Pick the member's active loan with the highest remaining balance.
+            // (status 'active' first, then 'approved' with a disbursed balance.)
+            const { data: memberLoans } = await supabase
+              .from('loans')
+              .select('id, loan_id, remaining_balance, total_repayment, status')
+              .eq('profile_id', proof.profile_id)
+              .in('status', ['active', 'approved'])
+              .order('remaining_balance', { ascending: false, nullsFirst: false });
+
+            const targetLoan = (memberLoans && memberLoans[0]) || null;
+            if (targetLoan && repaymentAmount > 0) {
+              const currentBal = parseFloat(
+                targetLoan.remaining_balance != null
+                  ? targetLoan.remaining_balance
+                  : targetLoan.total_repayment,
+              ) || 0;
+              const newBalance = Math.max(0, currentBal - repaymentAmount);
+              const loanUpdate = {
+                remaining_balance: newBalance,
+                updated_at: now,
+              };
+              if (newBalance <= 0) {
+                loanUpdate.status = 'completed';
+                loanUpdate.remaining_months = 0;
+              }
+              await supabase.from('loans').update(loanUpdate).eq('id', targetLoan.id);
+
+              await supabase.from('loan_repayments').insert({
+                loan_id: targetLoan.id,
+                profile_id: proof.profile_id,
+                amount: repaymentAmount,
+                paid_at: now,
+                status: 'paid',
+                reference: proofId,
+                recorded_by: req.user.id,
+              });
+
+              logger.info(
+                `Loan repayment applied: proof ${proofId} → loan ${targetLoan.loan_id || targetLoan.id} ` +
+                  `(₦${repaymentAmount}, balance ₦${currentBal} → ₦${newBalance})`,
+              );
+            } else if (!targetLoan) {
+              logger.warn(
+                `Loan repayment proof ${proofId} approved but member has no active/approved loan to apply it to.`,
+              );
+            }
+          }
+        } catch (applyErr) {
+          // Never fail the approval because of the balance application — it can
+          // be reconciled later. The proof is already marked approved.
+          logger.error('Apply loan repayment effect failed (non-fatal):', applyErr.message);
+        }
+      }
 
       // Get the created receipt
       const { data: receipt } = await supabase

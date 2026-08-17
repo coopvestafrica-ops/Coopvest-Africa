@@ -26,6 +26,7 @@ Loan _convertLoanDataToLoan(LoanData data) {
     updatedAt: data.createdAt,
     approvedAt: null,
     disbursedAt: null,
+    remainingBalance: data.remainingBalance,
   );
 }
 

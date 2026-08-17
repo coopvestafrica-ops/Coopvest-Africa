@@ -35,7 +35,7 @@ import '../../../presentation/screens/announcements/announcements_screen.dart';
 import '../../../presentation/screens/guarantor/guarantor_dashboard_screen.dart';
 import '../../../presentation/screens/documents/document_upload_screen.dart';
 import '../../../presentation/screens/profile/profile_settings_screen.dart';
-import 'package:fl_chart/fl_chart.dart';
+
 import '../../../presentation/widgets/loan/loan_eligibility_card.dart';
 
 class HomeDashboardScreen extends ConsumerStatefulWidget {
@@ -126,6 +126,7 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
         ref.read(walletProvider.notifier).loadWallet(),
         ref.read(loanProvider.notifier).getLoans(),
         ref.read(contributionProvider.notifier).loadContributions(),
+        ref.read(notificationsProvider.notifier).loadNotifications(),
       ]);
 
       // Fetch recent transactions for the home preview (non-blocking).
@@ -179,6 +180,7 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
     final walletState = ref.watch(walletProvider);
     final wallet = walletState.wallet;
     final loansState = ref.watch(loanProvider);
+    final contributionState = ref.watch(contributionProvider);
     
     final userName = user?.name.split(' ').first ?? 'User';
     final membershipId = user?.id.substring(0, 6) ?? 'N/A';
@@ -186,7 +188,7 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
     final walletBalance = wallet?.balance ?? 0.0;
     final totalContributions = wallet?.totalContributions ?? 0.0;
     final activeLoans = loansState.loans
-        .where((l) => l.status == 'active' || l.status == 'repaying')
+        .where((l) => isLoanActive(l.status))
         .fold(0.0, (sum, l) => sum + l.amount);
 
     final recentTransactions = ref.watch(transactionsProvider);
@@ -230,11 +232,11 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
                             child: _buildCompactStatCard(
                               context,
                               'Savings',
-                              '₦${totalContributions.formatNumber()}',
+                              '₦${(wallet?.totalSavings ?? 0.0).formatNumber()}',
                               Icons.savings_outlined,
                               () => Navigator.push(context, MaterialPageRoute(builder: (context) => const MonthlyContributionsScreen())),
                               accentColor: const Color(0xFF2E7D32),
-                              isZero: totalContributions <= 0,
+                              isZero: (wallet?.totalSavings ?? 0.0) <= 0,
                               zeroHint: 'Start saving',
                               onZeroTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => DepositScreen(userId: user?.id ?? ''))),
                             ),
@@ -354,7 +356,7 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
                       children: [
                         Expanded(
                           flex: 3,
-                          child: _buildInsightsCard(context, walletState),
+                          child: _buildInsightsCard(context, walletState, contributionState),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -1096,7 +1098,14 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
     }
   }
 
-  Widget _buildInsightsCard(BuildContext context, WalletState walletState) {
+  Widget _buildInsightsCard(BuildContext context, WalletState walletState, ContributionState contributionState) {
+    final summary = contributionState.summary;
+    final totalThisMonth = summary?.totalThisMonth ?? 0.0;
+    final expectedMonthly = (summary?.expectedMonthlyAmount ?? 0.0);
+    final lifetime = summary?.lifetimeContributions ?? (walletState.wallet?.totalContributions ?? 0.0);
+    final progress = expectedMonthly > 0 ? (totalThisMonth / expectedMonthly).clamp(0.0, 1.0) : 0.0;
+    final isUpToDate = summary?.contributionStatus == 'up_to_date';
+
     return GestureDetector(
       onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => WalletDashboardScreen(userId: ref.read(currentUserProvider)?.id ?? '', userName: ref.read(currentUserProvider)?.name ?? ''))),
       child: Container(
@@ -1155,82 +1164,69 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
             ),
             const SizedBox(height: 14),
             Text(
-              'Contributions Trend',
+              'This Month\'s Contribution',
               style: TextStyle(
                 fontSize: 12,
                 color: context.textSecondary,
                 fontWeight: FontWeight.w500,
               ),
             ),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 100,
-              child: LineChart(
-                LineChartData(
-                  gridData: const FlGridData(show: false),
-                  titlesData: FlTitlesData(
-                    leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (value, meta) {
-                          const titles = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
-                          if (value.toInt() < titles.length) {
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 6),
-                              child: Text(titles[value.toInt()], style: TextStyle(fontSize: 10, color: context.textSecondary, fontWeight: FontWeight.w500)),
-                            );
-                          }
-                          return const Text('');
-                        },
-                        reservedSize: 24,
-                      ),
-                    ),
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '\u20a6${totalThisMonth.formatNumber()}',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: context.textPrimary,
                   ),
-                  borderData: FlBorderData(show: false),
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: const [
-                        FlSpot(0, 20),
-                        FlSpot(1, 35),
-                        FlSpot(2, 28),
-                        FlSpot(3, 45),
-                        FlSpot(4, 40),
-                        FlSpot(5, 60),
-                      ],
-                      isCurved: true,
-                      curveSmoothness: 0.35,
-                      color: CoopvestColors.primary,
-                      barWidth: 3,
-                      isStrokeCapRound: true,
-                      dotData: FlDotData(
-                        show: true,
-                        getDotPainter: (spot, percent, barData, index) {
-                          return FlDotCirclePainter(
-                            radius: index == 5 ? 5 : 0,
-                            color: CoopvestColors.primary,
-                            strokeWidth: 2,
-                            strokeColor: Colors.white,
-                          );
-                        },
-                      ),
-                      belowBarData: BarAreaData(
-                        show: true,
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            CoopvestColors.primary.withOpacity(0.2),
-                            CoopvestColors.primary.withOpacity(0.02),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
+                ),
+                const SizedBox(width: 6),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 3),
+                  child: Text(
+                    expectedMonthly > 0 ? 'of \u20a6${expectedMonthly.formatNumber()}' : 'target not set',
+                    style: TextStyle(fontSize: 11, color: context.textSecondary),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 8,
+                backgroundColor: context.dividerColor,
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  isUpToDate ? CoopvestColors.success : CoopvestColors.primary,
                 ),
               ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _buildInsightMiniStat(
+                  context,
+                  'Lifetime',
+                  '\u20a6${lifetime.formatNumber()}',
+                ),
+                _buildInsightMiniStat(
+                  context,
+                  'Status',
+                  isUpToDate
+                      ? 'Up to date'
+                      : (summary?.contributionStatus == 'overdue' ? 'Overdue' : 'Pending'),
+                  color: isUpToDate
+                      ? CoopvestColors.success
+                      : (summary?.contributionStatus == 'overdue'
+                          ? CoopvestColors.error
+                          : CoopvestColors.warning),
+                ),
+              ],
             ),
           ],
         ),
@@ -1238,9 +1234,30 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
     );
   }
 
+  Widget _buildInsightMiniStat(BuildContext context, String label, String value, {Color? color}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(fontSize: 10, color: context.textSecondary),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: color ?? context.textPrimary,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildLoanStatusCard(BuildContext context, LoansState loansState) {
     final pendingLoan = loansState.loans.any((l) => l.status == 'under_review' || l.status == 'pending_guarantors');
-    final activeLoan = loansState.loans.any((l) => l.status == 'active' || l.status == 'repaying');
+    final activeLoan = loansState.loans.any((l) => isLoanActive(l.status));
     
     final statusColor = pendingLoan 
         ? CoopvestColors.warning 

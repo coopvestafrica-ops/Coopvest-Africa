@@ -68,6 +68,50 @@ function _getFirebaseAdmin() {
 
 // ── in-app ────────────────────────────────────────────────────────────────────
 
+// The notifications table enforces CHECK constraints on `type` and `category`.
+// Allowed type:  transaction, savings, investment, loan, referral, kyc, system,
+//                promotion, security, reminder
+// Allowed category: credit, debit, milestone, expiry, status_change, info,
+//                warning, success, action_required
+// Internal callers pass richer type strings (e.g. 'payment_proof_approved',
+// 'loan_approved', 'wallet_credited'). Without normalisation every insert
+// violated the CHECK and was silently dropped, leaving the notifications table
+// empty. Map internal types to the nearest allowed value.
+const ALLOWED_NOTIF_TYPES = new Set([
+  'transaction', 'savings', 'investment', 'loan', 'referral',
+  'kyc', 'system', 'promotion', 'security', 'reminder',
+]);
+const ALLOWED_NOTIF_CATEGORIES = new Set([
+  'credit', 'debit', 'milestone', 'expiry', 'status_change',
+  'info', 'warning', 'success', 'action_required',
+]);
+
+function normalizeNotifType(type) {
+  if (!type) return 'system';
+  if (ALLOWED_NOTIF_TYPES.has(type)) return type;
+  const t = String(type).toLowerCase();
+  if (t.includes('loan') || t.includes('rollover') || t.includes('guarantor')) return 'loan';
+  if (t.includes('wallet') || t.includes('payment') || t.includes('deposit') || t.includes('transaction')) return 'transaction';
+  if (t.includes('sav')) return 'savings';
+  if (t.includes('invest')) return 'investment';
+  if (t.includes('kyc') || t.includes('verification')) return 'kyc';
+  if (t.includes('referral')) return 'referral';
+  if (t.includes('otp') || t.includes('security') || t.includes('login') || t.includes('password')) return 'security';
+  if (t.includes('remind') || t.includes('due')) return 'reminder';
+  if (t.includes('promo')) return 'promotion';
+  return 'system';
+}
+
+function normalizeNotifCategory(category, fallbackType) {
+  if (category && ALLOWED_NOTIF_CATEGORIES.has(category)) return category;
+  const t = String(fallbackType || '').toLowerCase();
+  if (t.includes('approved') || t.includes('credited') || t.includes('success')) return 'success';
+  if (t.includes('reject') || t.includes('failed') || t.includes('declined')) return 'warning';
+  if (t.includes('request') || t.includes('required') || t.includes('action')) return 'action_required';
+  if (t.includes('approved') || t.includes('status')) return 'status_change';
+  return 'info';
+}
+
 async function sendInApp({
   profileId,
   title,
@@ -76,9 +120,11 @@ async function sendInApp({
   category = 'info',
   priority = 'normal',
 }) {
+  const dbType = normalizeNotifType(type);
+  const dbCategory = normalizeNotifCategory(category, type);
   const { data, error } = await supabase
     .from('notifications')
-    .insert({ profile_id: profileId, title, body, type, category, priority })
+    .insert({ profile_id: profileId, title, body, type: dbType, category: dbCategory, priority })
     .select('*')
     .maybeSingle();
 

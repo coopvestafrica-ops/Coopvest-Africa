@@ -43,11 +43,14 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
     final loanState = ref.watch(loanProvider);
     final loans = loanState.loans;
     
-    // Calculate stats from real data
-    final activeLoans = loans.where((l) => l.status == 'active' || l.status == 'repaying').length;
+    // Calculate stats from real data.
+    // The backend marks disbursed loans as 'approved' (not 'active'), so we
+    // treat 'approved' as an active/repaying loan for display purposes.
+    final activeLoans = loans.where((l) => isLoanActive(l.status)).length;
     final totalBorrowed = loans.fold(0.0, (sum, l) => sum + l.amount);
-    final totalRepaid = loans.where((l) => l.status == 'completed').fold(0.0, (sum, l) => sum + l.totalRepayment);
-    
+    // Total repaid = sum over all loans of (totalRepayment - remainingBalance).
+    final totalRepaid = loans.fold(0.0, (sum, l) => sum + l.amountRepaid);
+
     final overdueLoans = loans.where((l) => l.status.toLowerCase() == 'overdue' || l.status.toLowerCase() == 'in_recovery').toList();
     final hasOverdueLoans = overdueLoans.isNotEmpty;
 
@@ -385,6 +388,57 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
                 ),
               ],
             ),
+            // For active/approved loans, show the live remaining balance and
+            // total repaid so the member can see real repayment progress.
+            if (isLoanActive(loan.status) && loan.totalRepayment > 0) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: CoopvestColors.success.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Remaining',
+                          style: TextStyle(color: context.textSecondary, fontSize: 11),
+                        ),
+                        Text(
+                          '\u20a6${loan.remainingBalance.formatNumber()}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: context.textPrimary,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          'Repaid',
+                          style: TextStyle(color: context.textSecondary, fontSize: 11),
+                        ),
+                        Text(
+                          '\u20a6${loan.amountRepaid.formatNumber()}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: CoopvestColors.success,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (isGatheringGuarantors) ...[
               const SizedBox(height: 16),
               _buildGuarantorProgress(loan),
@@ -499,6 +553,7 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
         return 'Under Review';
       case 'active':
       case 'repaying':
+      case 'approved':
         return 'Active';
       case 'completed':
         return 'Completed';
@@ -615,6 +670,7 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
     switch (status.toLowerCase()) {
       case 'active':
       case 'repaying':
+      case 'approved':
         return CoopvestColors.success;
       case 'pending':
       case 'awaiting_guarantors':

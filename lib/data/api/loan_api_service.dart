@@ -156,6 +156,7 @@ class LoanData {
   final double interestRate;
   final double monthlyRepayment;
   final double totalRepayment;
+  final double remainingBalance;
   final String status;
   final String purpose;
   final String? qrCode;
@@ -172,6 +173,7 @@ class LoanData {
     required this.interestRate,
     required this.monthlyRepayment,
     this.totalRepayment = 0.0,
+    this.remainingBalance = 0.0,
     required this.status,
     required this.purpose,
     this.qrCode,
@@ -206,6 +208,9 @@ class LoanData {
           0.0,
       totalRepayment: (json['totalRepayment'] as num?)?.toDouble() ??
           (json['total_repayment'] as num?)?.toDouble() ??
+          0.0,
+      remainingBalance: (json['remaining_balance'] as num?)?.toDouble() ??
+          (json['remainingBalance'] as num?)?.toDouble() ??
           0.0,
       status: (json['status'] ?? '').toString(),
       purpose: (json['purpose'] ?? '').toString(),

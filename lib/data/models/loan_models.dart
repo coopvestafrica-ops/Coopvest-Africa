@@ -19,6 +19,7 @@ class Loan extends Equatable {
   final DateTime updatedAt;
   final DateTime? approvedAt;
   final DateTime? disbursedAt;
+  final double remainingBalance;
 
   const Loan({
     required this.id,
@@ -37,6 +38,7 @@ class Loan extends Equatable {
     required this.updatedAt,
     this.approvedAt,
     this.disbursedAt,
+    this.remainingBalance = 0.0,
   });
 
   factory Loan.fromJson(Map<String, dynamic> json) {
@@ -61,6 +63,9 @@ class Loan extends Equatable {
       disbursedAt: json['disbursed_at'] != null
           ? DateTime.parse(json['disbursed_at'] as String)
           : null,
+      remainingBalance: (json['remaining_balance'] as num?)?.toDouble() ??
+          (json['remainingBalance'] as num?)?.toDouble() ??
+          0.0,
     );
   }
 
@@ -82,6 +87,7 @@ class Loan extends Equatable {
       'updated_at': updatedAt.toIso8601String(),
       'approved_at': approvedAt?.toIso8601String(),
       'disbursed_at': disbursedAt?.toIso8601String(),
+      'remaining_balance': remainingBalance,
     };
   }
 
@@ -102,6 +108,7 @@ class Loan extends Equatable {
     DateTime? updatedAt,
     DateTime? approvedAt,
     DateTime? disbursedAt,
+    double? remainingBalance,
   }) {
     return Loan(
       id: id ?? this.id,
@@ -120,6 +127,7 @@ class Loan extends Equatable {
       updatedAt: updatedAt ?? this.updatedAt,
       approvedAt: approvedAt ?? this.approvedAt,
       disbursedAt: disbursedAt ?? this.disbursedAt,
+      remainingBalance: remainingBalance ?? this.remainingBalance,
     );
   }
 
@@ -127,6 +135,21 @@ class Loan extends Equatable {
     if (disbursedAt == null) return null;
     final nextPayment = disbursedAt!.add(Duration(days: 30 * 1));
     return nextPayment;
+  }
+
+  /// True for loans the member is actively repaying or has been approved and
+  /// disbursed. The backend marks disbursed loans as 'approved' (not 'active'),
+  /// so we treat 'approved' as active for display purposes.
+  bool get isActive =>
+      status == 'active' ||
+      status == 'repaying' ||
+      status == 'approved';
+
+  /// Amount repaid so far on this loan.
+  double get amountRepaid {
+    final repaid = totalRepayment - remainingBalance;
+    if (repaid.isNaN || repaid < 0) return 0.0;
+    return repaid > totalRepayment ? totalRepayment : repaid;
   }
 
   @override
@@ -147,8 +170,15 @@ class Loan extends Equatable {
     updatedAt,
     approvedAt,
     disbursedAt,
+    remainingBalance,
   ];
 }
+
+/// True for loans the member is actively repaying or has been approved and
+/// disbursed. Kept as a top-level helper so list filters read naturally:
+/// `loans.where(isLoanActive)`.
+bool isLoanActive(String status) =>
+    status == 'active' || status == 'repaying' || status == 'approved';
 
 /// Guarantor Model
 class Guarantor extends Equatable {
