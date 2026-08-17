@@ -12,7 +12,7 @@ import '../../../presentation/widgets/common/cards.dart';
 import '../savings/savings_goals_screen.dart';
 import '../transactions/transactions_history_screen.dart';
 import 'deposit_screen.dart';
-import 'withdrawal_screen.dart';
+// import 'withdrawal_screen.dart';
 import 'deposit_status_screen.dart';
 import '../contributions/payment_proof_upload_screen.dart';
 import '../contributions/payment_proofs_status_screen.dart';
@@ -315,12 +315,15 @@ class _WalletDashboardScreenState extends ConsumerState<WalletDashboardScreen> {
           Icons.add_circle_outline,
           () => Navigator.push(context, MaterialPageRoute(builder: (context) => DepositScreen(userId: widget.userId))),
         ),
-        _buildActionItem(
-          context,
-          'Withdraw',
-          Icons.file_upload_outlined,
-          () => Navigator.push(context, MaterialPageRoute(builder: (context) => WithdrawalScreen(userId: widget.userId))),
-        ),
+        // Withdraw quick action disabled — bank withdrawals are temporarily
+        // unavailable. Re-enable (and restore the WithdrawalScreen form) when
+        // withdrawals to bank are restored.
+        // _buildActionItem(
+        //   context,
+        //   'Withdraw',
+        //   Icons.file_upload_outlined,
+        //   () => Navigator.push(context, MaterialPageRoute(builder: (context) => WithdrawalScreen(userId: widget.userId))),
+        // ),
         _buildActionItem(
           context,
           'Submit Proof',

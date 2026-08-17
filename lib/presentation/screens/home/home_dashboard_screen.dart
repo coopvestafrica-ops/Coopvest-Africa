@@ -25,7 +25,7 @@ import '../../../presentation/providers/announcement_provider.dart';
 import '../../../presentation/providers/guarantor_provider.dart';
 import '../../../presentation/providers/document_provider.dart';
 import '../../../presentation/screens/wallet/deposit_screen.dart';
-import '../../../presentation/screens/wallet/withdrawal_screen.dart';
+// import '../../../presentation/screens/wallet/withdrawal_screen.dart';
 import '../../../presentation/screens/loan/loan_dashboard_screen.dart';
 import '../../../presentation/screens/wallet/wallet_dashboard_screen.dart';
 import '../../../presentation/screens/referral/referral_dashboard_screen.dart';
@@ -615,12 +615,17 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
                       child: _buildHeaderActionChip(
                         label: 'Withdraw',
                         icon: Icons.north_east_rounded,
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => WithdrawalScreen(userId: userId),
-                          ),
-                        ),
+                        onTap: () {
+                          // Bank withdrawals are temporarily unavailable.
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Withdrawals to bank are temporarily unavailable. Please check back soon.',
+                              ),
+                              duration: Duration(seconds: 4),
+                            ),
+                          );
+                        },
                         filled: false,
                       ),
                     ),
