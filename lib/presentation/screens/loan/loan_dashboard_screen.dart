@@ -5,6 +5,7 @@ import '../../../config/theme_extension.dart';
 import '../../../core/utils/utils.dart' hide NumExtension;
 import '../../../core/extensions/number_extensions.dart';
 import '../../../data/models/loan_models.dart';
+import '../../../core/network/api_client.dart';
 import '../../../presentation/providers/loan_provider.dart';
 import '../../../presentation/widgets/common/buttons.dart';
 import '../../../presentation/widgets/common/cards.dart';
@@ -286,7 +287,16 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
   Widget _buildLoanCard(BuildContext context, Loan loan) {
     final statusColor = _getStatusColor(loan.status);
     final loanType = loan.purpose != null ? '${loan.purpose}' : 'Quick Loan';
-    
+    // A loan is "gathering guarantors" while pending/under_review and not yet
+    // fully consented. This is the in-progress session the borrower can
+    // resume (share QR) or cancel.
+    final isGatheringGuarantors =
+        (loan.status.toLowerCase() == 'pending' ||
+            loan.status.toLowerCase() == 'under_review' ||
+            loan.status.toLowerCase() == 'pending_guarantors' ||
+            loan.status.toLowerCase() == 'awaiting_guarantors') &&
+        loan.guarantorsAccepted < loan.guarantorsRequired;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: AppCard(
@@ -327,7 +337,7 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
-                    loan.status,
+                    _statusLabel(loan.status),
                     style: TextStyle(
                       color: statusColor,
                       fontSize: 12,
@@ -375,10 +385,179 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
                 ),
               ],
             ),
+            if (isGatheringGuarantors) ...[
+              const SizedBox(height: 16),
+              _buildGuarantorProgress(loan),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _cancelLoan(loan),
+                      icon: const Icon(Icons.close, size: 16),
+                      label: const Text('Cancel Application'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: CoopvestColors.error,
+                        side: BorderSide(color: CoopvestColors.error.withOpacity(0.4)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  /// Live guarantor progress indicator: "X of 3 guarantors approved" with a
+  /// row of step bars that fill as each guarantor consents. The session stays
+  /// visible (and counting) until all required guarantors consent.
+  Widget _buildGuarantorProgress(Loan loan) {
+    final accepted = loan.guarantorsAccepted;
+    final required = loan.guarantorsRequired;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: CoopvestColors.warning.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: CoopvestColors.warning.withOpacity(0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.group_outlined, size: 16, color: CoopvestColors.warning),
+              const SizedBox(width: 6),
+              Text(
+                '$accepted of $required guarantors approved',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: context.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                required > 0 ? '${((accepted / required) * 100).round()}%' : '0%',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: CoopvestColors.warning,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: List.generate(required, (i) {
+              final done = i < accepted;
+              return Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(right: i < required - 1 ? 6 : 0),
+                  child: Container(
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: done
+                          ? CoopvestColors.success
+                          : CoopvestColors.lightGray.withOpacity(0.5),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            accepted >= required
+                ? 'All guarantors approved — awaiting admin review.'
+                : 'Share your QR code with ${required - accepted} more guarantor${required - accepted == 1 ? '' : 's'} to continue.',
+            style: TextStyle(
+              fontSize: 11,
+              color: context.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _statusLabel(String status) {
+    switch (status.toLowerCase()) {
+      case 'pending':
+      case 'pending_guarantors':
+      case 'awaiting_guarantors':
+        return 'Awaiting Guarantors';
+      case 'under_review':
+        return 'Under Review';
+      case 'active':
+      case 'repaying':
+        return 'Active';
+      case 'completed':
+        return 'Completed';
+      case 'rejected':
+        return 'Rejected';
+      case 'cancelled':
+        return 'Cancelled';
+      default:
+        return status;
+    }
+  }
+
+  Future<void> _cancelLoan(Loan loan) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel Loan Application?'),
+        content: Text(
+          'This will permanently cancel your loan application (Loan ID: ${loan.id}). '
+          'Any guarantor approvals collected so far will be discarded. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep Application'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: CoopvestColors.error),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Cancel Loan'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      final apiClient = ref.read(apiClientProvider);
+      await apiClient.post('/loans/${loan.id}/cancel', data: {});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Loan application cancelled.'),
+            backgroundColor: CoopvestColors.primary,
+          ),
+        );
+      }
+      // Refresh the loans list so the cancelled session disappears.
+      ref.read(loanProvider.notifier).getLoans();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to cancel loan: $e'),
+            backgroundColor: CoopvestColors.error,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildEmptyState(BuildContext context) {

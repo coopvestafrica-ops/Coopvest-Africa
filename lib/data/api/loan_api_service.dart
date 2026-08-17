@@ -155,10 +155,11 @@ class LoanData {
   final int tenure;
   final double interestRate;
   final double monthlyRepayment;
-  final double totalRepayment;
   final String status;
   final String purpose;
   final String? qrCode;
+  final int guarantorsAccepted;
+  final int guarantorsRequired;
   final DateTime createdAt;
 
   LoanData({
@@ -169,52 +170,31 @@ class LoanData {
     required this.tenure,
     required this.interestRate,
     required this.monthlyRepayment,
-    this.totalRepayment = 0.0,
     required this.status,
     required this.purpose,
     this.qrCode,
+    this.guarantorsAccepted = 0,
+    this.guarantorsRequired = 3,
     required this.createdAt,
   });
 
   factory LoanData.fromJson(Map<String, dynamic> json) {
-    // The /loans list endpoint returns raw DB rows in snake_case
-    // (loan_id, loan_type, tenure_months, monthly_repayment, effective_interest_rate,
-    // created_at), while the /loans/apply response uses camelCase. Support both.
-    String parseCreatedAt() {
-      final v = json['createdAt'] ?? json['created_at'];
-      return v == null ? DateTime.now().toIso8601String() : v.toString();
-    }
-
     return LoanData(
-      id: (json['loanId'] ?? json['id'] ?? json['loan_id'])?.toString() ?? '',
-      userId: (json['userId'] ?? json['user_id'] ?? json['profile_id'])?.toString() ?? '',
-      loanType: (json['loanType'] ?? json['loan_type'])?.toString() ?? '',
+      id: json['loanId'] as String? ?? json['id'] as String? ?? '',
+      userId: json['userId'] as String? ?? '',
+      loanType: json['loanType'] as String? ?? '',
       amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
-      tenure: _asInt(json['tenureMonths'] ?? json['tenure'] ?? json['tenure_months']),
-      interestRate: (json['effectiveInterestRate'] as num?)?.toDouble() ??
-          (json['interest_rate'] as num?)?.toDouble() ??
-          (json['effective_interest_rate'] as num?)?.toDouble() ??
-          (json['base_interest_rate'] as num?)?.toDouble() ??
-          0.0,
-      monthlyRepayment: (json['monthlyRepayment'] as num?)?.toDouble() ??
-          (json['monthly_repayment'] as num?)?.toDouble() ??
-          0.0,
-      totalRepayment: (json['totalRepayment'] as num?)?.toDouble() ??
-          (json['total_repayment'] as num?)?.toDouble() ??
-          0.0,
-      status: (json['status'] ?? '').toString(),
-      purpose: (json['purpose'] ?? '').toString(),
+      tenure: json['tenureMonths'] as int? ?? json['tenure'] as int? ?? 0,
+      interestRate: (json['effectiveInterestRate'] as num?)?.toDouble() ?? (json['interest_rate'] as num?)?.toDouble() ?? 0.0,
+      monthlyRepayment: (json['monthlyRepayment'] as num?)?.toDouble() ?? (json['monthly_repayment'] as num?)?.toDouble() ?? 0.0,
+      status: json['status'] as String? ?? '',
+      purpose: json['purpose'] as String? ?? '',
       qrCode: json['qr_code'] as String?,
-      createdAt: DateTime.tryParse(parseCreatedAt()) ?? DateTime.now(),
+      guarantorsAccepted: json['guarantors_accepted'] as int? ?? 0,
+      guarantorsRequired: json['guarantors_required'] as int? ?? 3,
+      createdAt: json['createdAt'] != null ? DateTime.parse(json['createdAt'] as String) : DateTime.now(),
     );
   }
-}
-
-int _asInt(dynamic v) {
-  if (v == null) return 0;
-  if (v is int) return v;
-  if (v is num) return v.toInt();
-  return int.tryParse(v.toString()) ?? 0;
 }
 
 class LoansListResponse {

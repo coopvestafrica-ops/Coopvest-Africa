@@ -81,15 +81,13 @@ class LoanRepository {
           tenure: result.loan!.tenure,
           interestRate: result.loan!.interestRate,
           monthlyRepayment: result.loan!.monthlyRepayment,
-          totalRepayment: result.loan!.totalRepayment > 0
-              ? result.loan!.totalRepayment
-              : result.loan!.monthlyRepayment * result.loan!.tenure,
+          totalRepayment: result.loan!.monthlyRepayment * result.loan!.tenure,
           status: _mapLoanStatus(result.loan!.status),
           purpose: result.loan!.purpose,
           guarantorsAccepted: 0,
           guarantorsRequired: 3,
           createdAt: result.loan!.createdAt,
-          updatedAt: result.loan!.createdAt,
+          updatedAt: DateTime.now(),
         );
         
         return ApiResult.success(loan);
@@ -131,15 +129,13 @@ class LoanRepository {
             tenure: e.tenure,
             interestRate: e.interestRate,
             monthlyRepayment: e.monthlyRepayment,
-            totalRepayment: e.totalRepayment > 0
-                ? e.totalRepayment
-                : e.monthlyRepayment * e.tenure,
+            totalRepayment: e.monthlyRepayment * e.tenure,
             status: _mapLoanStatus(e.status),
             purpose: e.purpose,
-            guarantorsAccepted: 0,
-            guarantorsRequired: 3,
-            createdAt: e.createdAt,
-            updatedAt: e.createdAt,
+            guarantorsAccepted: e.guarantorsAccepted,
+            guarantorsRequired: e.guarantorsRequired,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
           );
         }).toList();
 
@@ -308,26 +304,17 @@ class LoanRepository {
   String _mapLoanStatus(String apiStatus) {
     switch (apiStatus) {
       case 'pending_guarantors':
-      case 'pending':
         return 'pending';
       case 'guarantors_confirmed':
-      case 'under_review':
-      case 'approved':
         return 'approved';
       case 'active':
         return 'active';
-      case 'repaying':
-        return 'repaying';
       case 'completed':
         return 'completed';
-      case 'defaulted':
-        return 'defaulted';
       case 'rejected':
         return 'rejected';
       default:
-        // Preserve unknown statuses verbatim instead of collapsing to 'pending',
-        // so screens that filter on 'active'/'repaying' keep working.
-        return apiStatus.isEmpty ? 'pending' : apiStatus;
+        return 'pending';
     }
   }
 
