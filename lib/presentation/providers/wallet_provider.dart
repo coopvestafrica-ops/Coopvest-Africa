@@ -108,13 +108,14 @@ class WalletRepository {
   }
 
   /// Make contribution - returns Map with transaction and message
-  Future<Map<String, dynamic>> makeContribution(double amount, {String? description, String? proofUrl}) async {
+  Future<Map<String, dynamic>> makeContribution(double amount, {String? description, String? proofUrl, String? paymentType}) async {
     try {
       final Map<String, dynamic> requestData = {
         'amount': amount,
       };
       if (description != null) requestData['description'] = description;
       if (proofUrl != null) requestData['proof_url'] = proofUrl;
+      if (paymentType != null) requestData['payment_type'] = paymentType;
       
       final response = await _apiClient.post(
         '/wallet/contribute',
@@ -317,10 +318,11 @@ class WalletNotifier extends StateNotifier<WalletState> {
     required double amount,
     String? description,
     String? proofUrl,
+    String? paymentType,
   }) async {
     state = state.copyWith(status: WalletStatus.loading);
     try {
-      final result = await _walletRepository.makeContribution(amount, description: description, proofUrl: proofUrl);
+      final result = await _walletRepository.makeContribution(amount, description: description, proofUrl: proofUrl, paymentType: paymentType);
 
       // Note: We don't reload wallet immediately since deposit is pending verification
       // The wallet will be updated after admin verification

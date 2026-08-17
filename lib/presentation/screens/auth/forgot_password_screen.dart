@@ -94,18 +94,32 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen>
         'email': _emailController.text.trim().toLowerCase(),
         'type': 'mobile',
       });
-    } catch (_) {
-      // Backend always returns success to prevent email enumeration.
-    } finally {
+    } catch (e) {
+      // A transport/network failure (or 5xx) means no email was sent. Do NOT
+      // mask it as success — otherwise the user is sent to the OTP screen and
+      // verifyOtp always fails with "Token has expired or is invalid" because
+      // no code was ever generated. (The backend still returns 200 for an
+      // unregistered email to prevent enumeration, so this only fires on real
+      // failures, which is exactly when the user should retry.)
       if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _emailSent = true;
-          _sentEmail = _emailController.text.trim().toLowerCase();
-          _secondsLeft = _countdownSeconds;
-        });
-        _startSuccessAnimation();
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not send reset code. Check your connection and try again.'),
+            backgroundColor: CoopvestColors.error,
+          ),
+        );
       }
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _emailSent = true;
+        _sentEmail = _emailController.text.trim().toLowerCase();
+        _secondsLeft = _countdownSeconds;
+      });
+      _startSuccessAnimation();
     }
   }
 

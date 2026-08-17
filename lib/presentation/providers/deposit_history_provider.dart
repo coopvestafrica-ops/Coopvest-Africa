@@ -69,6 +69,7 @@ class DepositHistoryNotifier extends StateNotifier<DepositHistoryState> {
         currency: r.currency,
         status: newStatus,
         paymentMethod: r.paymentMethod,
+        paymentType: r.paymentType,
         paymentProofUrl: r.paymentProofUrl,
         paymentReference: r.paymentReference,
         paymentDate: r.paymentDate,

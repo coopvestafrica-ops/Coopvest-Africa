@@ -1,53 +1,136 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../data/models/kyc_models.dart';
 import '../providers/auth_provider.dart';
-import '../screens/main_container.dart';
+import '../providers/kyc_provider.dart';
 import '../screens/auth/registration_onboarding_screen.dart';
-import '../screens/auth/contribution_type_selection_screen.dart';
-import '../screens/auth/salary_deduction_consent_screen.dart';
-import '../screens/auth/account_activation_screen.dart';
 import '../screens/kyc/kyc_employment_details_screen.dart';
 
 /// AuthGuard determines where to send the user based on their auth state:
-/// - Not authenticated → Welcome/Login screen (child widget)
+/// - Not authenticated → child (Welcome/Login)
 /// - Authenticated but registration not complete → Continue registration
-/// - Authenticated but KYC not complete → Continue KYC
-/// - Authenticated and fully registered → Dashboard (child widget)
-class AuthGuard extends ConsumerWidget {
+/// - Authenticated but KYC not yet submitted → Continue KYC
+/// - Authenticated and KYC already submitted (pending review/approved) → Dashboard
+///
+/// Previously this forced the KYC flow whenever `user.kycStatus != 'approved'`,
+/// which re-prompted KYC on every app start for members who had already
+/// submitted but were still awaiting admin approval. We now gate on whether the
+/// member has *submitted* KYC (loaded from the backend), not on approval.
+class AuthGuard extends ConsumerStatefulWidget {
   final Widget child;
 
   const AuthGuard({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AuthGuard> createState() => _AuthGuardState();
+}
+
+class _AuthGuardState extends ConsumerState<AuthGuard> {
+  bool _kycInitialized = false;
+
+  @override
+  Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
     final user = authState.user;
 
     // If not authenticated, show the child (WelcomeScreen)
     if (!authState.isAuthenticated) {
-      return child;
+      return widget.child;
     }
 
     // Check if registration is complete
     if (user != null && !user.registrationCompleted) {
-      // Continue registration from the next incomplete step
-      return _buildRegistrationFlow(user);
+      return const RegistrationOnboardingScreen(registrationData: {});
     }
 
-    // Check if KYC is approved
-    if (user != null && user.kycStatus != 'approved') {
-      // User needs to complete KYC
-      return const KYCEmploymentDetailsScreen();
+    // Registration complete — ensure we know the member's KYC submission
+    // status before deciding whether to prompt for KYC. Fetch once per
+    // authenticated session.
+    final kycState = ref.watch(kycProvider);
+    if (!_kycInitialized) {
+      _kycInitialized = true;
+      Future.microtask(() {
+        if (mounted) ref.read(kycProvider.notifier).initializeKYC();
+      });
     }
 
-    // All complete - show the dashboard
-    return child;
+    // While KYC status is still loading, show a neutral placeholder so we
+    // don't flash the KYC flow for users who have already submitted.
+    if (kycState.isLoading || kycState.status == KYCStatus.initial) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    // If the KYC fetch failed (e.g. a transient backend error / cold start on
+    // Render), do NOT dead-end the member on a "Could not verify" screen.
+    // Previously this blocked the app whenever /kyc/status timed out, even for
+    // members whose KYC was already submitted/approved. Instead, trust the
+    // profile's kycStatus returned by /auth/me: if it indicates the member has
+    // submitted (or we simply cannot tell), let them through to the dashboard
+    // and retry the KYC fetch in the background. Only prompt for KYC when the
+    // profile itself explicitly says 'pending'.
+    if (kycState.status == KYCStatus.error) {
+      final profileStatus = (user?.kycStatus ?? '').toLowerCase();
+      final profileSubmitted = profileStatus == 'submitted' ||
+          profileStatus == 'approved' ||
+          profileStatus == 'verified' ||
+          profileStatus == 'in_review' ||
+          profileStatus == 'rejected' ||
+          profileStatus == 'unknown'; // backend unreachable — don't block
+      if (profileSubmitted) {
+        // Retry the KYC fetch in the background so the submission status
+        // refreshes once the backend is reachable again, without blocking UI.
+        Future.microtask(() {
+          if (mounted) ref.read(kycProvider.notifier).initializeKYC();
+        });
+        return widget.child;
+      }
+      // Profile itself says pending AND we couldn't confirm via the KYC
+      // endpoint — show a retryable error rather than forcing the flow.
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off, size: 40),
+              const SizedBox(height: 12),
+              const Text('Could not verify your KYC status.'),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () {
+                  _kycInitialized = false;
+                  if (mounted) {
+                    ref.read(kycProvider.notifier).initializeKYC();
+                  }
+                },
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final submitted = _hasSubmittedKyc(kycState);
+    if (!submitted) {
+      // Member hasn't submitted KYC yet — guide them through it.
+      return const KYCEmploymentDetailsScreen(isFromRegistration: false);
+    }
+
+    // KYC submitted (pending review / approved / rejected) → dashboard.
+    return widget.child;
   }
 
-  Widget _buildRegistrationFlow(user) {
-    // For now, redirect to registration onboarding
-    // In a more advanced implementation, we could track the exact step
-    // and redirect to the specific screen
-    return const RegistrationOnboardingScreen(registrationData: {});
+  /// True when the member has already submitted KYC, i.e. their KYC record
+  /// carries a "submitted" lifecycle status (not just the initial "pending"
+  /// draft that exists before any submission).
+  bool _hasSubmittedKyc(KYCState kycState) {
+    final status = kycState.submission?.status ?? 'pending';
+    return status == 'submitted' ||
+        status == 'in_review' ||
+        status == 'verified' ||
+        status == 'approved' ||
+        status == 'rejected';
   }
 }

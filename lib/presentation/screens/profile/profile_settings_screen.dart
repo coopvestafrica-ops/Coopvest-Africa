@@ -16,6 +16,8 @@ import '../loan/qr_scanner_screen.dart';
 import '../documents/document_upload_screen.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/theme_provider.dart';
+import '../../providers/kyc_provider.dart';
+import '../kyc/kyc_employment_details_screen.dart';
 import 'package:share_plus/share_plus.dart';
 import 'edit_profile_screen.dart';
 import 'bank_accounts_screen.dart';
@@ -39,6 +41,16 @@ class _ProfileSettingsScreenState extends ConsumerState<ProfileSettingsScreen> {
   bool _isLoading = false;
   
   final ImagePicker _picker = ImagePicker();
+
+  @override
+  void initState() {
+    super.initState();
+    // Fetch KYC status so we can show/hide the "Complete KYC" entry and
+    // gate loan applications based on completion.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(kycProvider.notifier).initializeKYC();
+    });
+  }
 
   final List<Map<String, dynamic>> _settingsItems = [
     {
@@ -320,7 +332,7 @@ class _ProfileSettingsScreenState extends ConsumerState<ProfileSettingsScreen> {
             const SizedBox(height: 32),
             
             // Settings Sections
-            ..._settingsItems.map((section) => _buildSettingsSection(section, context)),
+            ..._visibleSettingsSections().map((section) => _buildSettingsSection(section, context)),
             
             const SizedBox(height: 32),
             // Logout Button
@@ -418,6 +430,21 @@ class _ProfileSettingsScreenState extends ConsumerState<ProfileSettingsScreen> {
     );
   }
 
+  List<Map<String, dynamic>> _visibleSettingsSections() {
+    final kycSubmitted = ref.watch(isKycSubmittedProvider);
+    if (kycSubmitted) {
+      // Hide the "Complete KYC" entry for members who already submitted/verified.
+      return _settingsItems.map((section) {
+        final items = (section['items'] as List).where((item) {
+          final it = item as Map<String, dynamic>;
+          return it['title'] != 'Complete KYC';
+        }).toList();
+        return {...section, 'items': items};
+      }).where((s) => (s['items'] as List).isNotEmpty).toList();
+    }
+    return _settingsItems;
+  }
+
   Widget _buildSettingsSection(Map<String, dynamic> section, BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -494,6 +521,16 @@ class _ProfileSettingsScreenState extends ConsumerState<ProfileSettingsScreen> {
         Navigator.of(context).push(
           MaterialPageRoute(builder: (context) => const EditProfileScreen()),
         );
+        break;
+      case 'Complete KYC':
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => const KYCEmploymentDetailsScreen(isFromRegistration: false),
+          ),
+        ).then((_) {
+          // Refresh KYC status when returning so the entry can be hidden if completed.
+          ref.read(kycProvider.notifier).initializeKYC();
+        });
         break;
       case 'Membership':
         Navigator.of(context).push(

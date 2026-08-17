@@ -92,7 +92,9 @@ class _ResetPasswordOtpScreenState extends ConsumerState<ResetPasswordOtpScreen>
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Code resent (check your email)'), backgroundColor: CoopvestColors.success));
+        // Only surface a real retry hint; we don't reveal whether the email is
+        // registered (the backend returns 200 for unknown emails too).
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not resend code. Check your connection and try again.'), backgroundColor: CoopvestColors.error));
       }
     } finally {
       if (mounted) setState(() => _isResending = false);

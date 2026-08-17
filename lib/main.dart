@@ -29,6 +29,7 @@ import 'presentation/screens/auth/account_activation_screen.dart';
 import 'presentation/screens/auth/forgot_password_screen.dart';
 import 'presentation/screens/auth/reset_password_otp_screen.dart';
 import 'presentation/screens/auth/email_verification_screen.dart';
+import 'presentation/screens/auth/biometric_lock_screen.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'presentation/screens/support/support_home_screen.dart';
 import 'presentation/screens/support/ticket_creation_screen.dart';
@@ -41,6 +42,7 @@ import 'presentation/screens/kyc/kyc_id_upload_screen.dart';
 import 'presentation/screens/kyc/kyc_selfie_screen.dart';
 import 'presentation/screens/kyc/kyc_success_screen.dart';
 import 'presentation/screens/kyc/kyc_bank_info_screen.dart';
+import 'presentation/screens/kyc/kyc_next_of_kin_screen.dart';
 import 'presentation/screens/loan/loan_dashboard_screen.dart';
 import 'presentation/screens/loan/loan_application_screen.dart';
 import 'presentation/screens/loan/guarantor_verification_screen.dart';
@@ -175,6 +177,11 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
   bool _isSessionRestored = false;
   bool _isCheckingBiometric = false;
   bool _wasPaused = false;
+  // Biometric gate: when true the authenticated user must satisfy the biometric
+  // prompt before the app content is shown. Reset on cold start (after a session
+  // is restored with biometrics enabled) and whenever the app is resumed.
+  bool _biometricUnlocked = false;
+  bool _biometricEnabled = false;
 
   @override
   void initState() {
@@ -196,8 +203,23 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
     }
     if (state == AppLifecycleState.resumed && _wasPaused) {
       _wasPaused = false;
-      _checkBiometricOnResume();
+      _onResume();
+      // Re-fetch admin-controlled feature flags so toggles made in the
+      // admin dashboard while the app was backgrounded take effect right
+      // away instead of waiting for the next periodic refresh.
+      FeatureService().refreshOnResume();
     }
+  }
+
+  /// Re-lock behind the biometric gate when the app is resumed, so a backgrounded
+  /// session can't be accessed without re-authenticating.
+  void _onResume() {
+    final authStatus = ref.read(authStatusProvider);
+    if (authStatus != AuthStatus.authenticated) return;
+    if (!_biometricEnabled) return;
+    _biometricUnlocked = false;
+    if (mounted) setState(() {});
+    _promptBiometric();
   }
 
   Future<void> _restoreSession() async {
@@ -206,6 +228,16 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
           await ref.read(authProvider.notifier).restoreSession();
       if (success) {
         debugPrint('[CoopvestApp] Session restored successfully');
+        // After a cold-start restore, if biometrics are enabled the session
+        // must be gated behind a biometric prompt. Previously the app went
+        // straight to the dashboard, letting anyone with the unlocked phone
+        // bypass fingerprint/face unlock entirely.
+        final securityService = SecurityService();
+        _biometricEnabled = await securityService.isBiometricEnabled();
+        _biometricUnlocked = !_biometricEnabled;
+        if (_biometricEnabled) {
+          _promptBiometric();
+        }
       } else {
         debugPrint('[CoopvestApp] No session to restore');
       }
@@ -220,31 +252,38 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
     }
   }
 
-  Future<void> _checkBiometricOnResume() async {
+  /// Prompt the biometric sensor. On success, clear the lock. On failure or
+  /// unavailability, keep the lock screen visible so the user can retry or fall
+  /// back to password sign-in. We never silently let the user through.
+  Future<void> _promptBiometric() async {
     if (_isCheckingBiometric) return;
-
-    final authStatus = ref.read(authStatusProvider);
-    if (authStatus != AuthStatus.authenticated) return;
-
-    final securityService = SecurityService();
-    final isBiometricEnabled = await securityService.isBiometricEnabled();
-
-    if (isBiometricEnabled) {
-      _isCheckingBiometric = true;
-      try {
-        final authenticated = await securityService.authenticate();
-        if (!authenticated && mounted) {
-          ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
-            const SnackBar(
-              content: Text('Biometric authentication required'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-      } finally {
-        _isCheckingBiometric = false;
+    if (!_biometricEnabled) return;
+    _isCheckingBiometric = true;
+    try {
+      final authenticated = await SecurityService().authenticate();
+      if (authenticated) {
+        _biometricUnlocked = true;
+        if (mounted) setState(() {});
       }
+      // If not authenticated, stay locked — the BiometricLockScreen offers a
+      // retry button and a password fallback.
+    } catch (e) {
+      debugPrint('[CoopvestApp] Biometric prompt error: $e');
+    } finally {
+      _isCheckingBiometric = false;
     }
+  }
+
+  /// Password fallback from the lock screen — sign out and return to login.
+  Future<void> _biometricFallbackToPassword() async {
+    try {
+      await ref.read(authProvider.notifier).logout();
+    } catch (e) {
+      debugPrint('[CoopvestApp] Logout from biometric fallback error: $e');
+    }
+    _biometricUnlocked = true;
+    _biometricEnabled = false;
+    if (mounted) setState(() {});
   }
 
   @override
@@ -270,13 +309,26 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
               if (!connectivity.isOnline)
                 const OfflineBanner(),
               
-              // Main app content with AuthGuard
+              // Main app content with AuthGuard. When the user is authenticated
+              // but biometrics are enabled and not yet satisfied (cold start /
+              // resume), show the biometric lock screen instead of the content.
               Expanded(
-                child: AuthGuard(
-                  child: authStatus == AuthStatus.authenticated
-                      ? const MainContainer()
-                      : const WelcomeScreen(),
-                ),
+                child: authStatus == AuthStatus.authenticated &&
+                        _biometricEnabled &&
+                        !_biometricUnlocked
+                    ? BiometricLockScreen(
+                        onUnlocked: () {
+                          if (mounted) {
+                            setState(() => _biometricUnlocked = true);
+                          }
+                        },
+                        onUsePassword: _biometricFallbackToPassword,
+                      )
+                    : AuthGuard(
+                        child: authStatus == AuthStatus.authenticated
+                            ? const MainContainer()
+                            : const WelcomeScreen(),
+                      ),
               ),
             ],
           );
@@ -344,6 +396,7 @@ class _CoopvestAppState extends ConsumerState<CoopvestApp>
             const KYCEmploymentDetailsScreen(),
         '/kyc-id-upload': (context) => const KYCIDUploadScreen(),
         '/kyc-selfie': (context) => const KYCSelfieScreen(),
+        '/kyc-next-of-kin': (context) => const KYCNextOfKinScreen(),
         '/kyc-bank-info': (context) => const KYCBankInfoScreen(),
         '/kyc-success': (context) => const KYCSuccessScreen(),
         '/kyc-complete': (context) => const KYCSuccessScreen(),

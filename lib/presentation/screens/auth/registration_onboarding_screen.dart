@@ -133,7 +133,6 @@ class _RegistrationOnboardingScreenState
 
   // Step 3 controllers
   final _idNumberCtrl = TextEditingController();
-  final _staffIdCtrl = TextEditingController();
 
   // Step 4 controllers
   final _occupationCtrl = TextEditingController();
@@ -175,8 +174,13 @@ class _RegistrationOnboardingScreenState
           await apiClient.get('/auth/complete-registration/status');
       final data = response.data as Map<String, dynamic>?;
       if ((data?['completed'] as bool? ?? false) && mounted) {
+        // Salary consent is only required for members who chose salary
+        // deduction. Direct-deposit members go straight to activation.
+        final nextRoute = _data.contributionType == _ContributionType.salaryDeduction
+            ? '/salary-deduction-consent'
+            : '/account-activation';
         Navigator.of(context).pushReplacementNamed(
-          '/salary-deduction-consent',
+          nextRoute,
           arguments: widget.registrationData,
         );
         return;
@@ -193,7 +197,6 @@ class _RegistrationOnboardingScreenState
     _addressCtrl.dispose();
     _lgaCtrl.dispose();
     _idNumberCtrl.dispose();
-    _staffIdCtrl.dispose();
     _occupationCtrl.dispose();
     _employerCtrl.dispose();
     _employerStaffIdCtrl.dispose();
@@ -282,7 +285,6 @@ class _RegistrationOnboardingScreenState
       return false;
     }
     _data.idNumber = _idNumberCtrl.text.trim();
-    _data.staffId = _staffIdCtrl.text.trim();
     return true;
   }
 
@@ -319,6 +321,9 @@ class _RegistrationOnboardingScreenState
     _data.occupation = _occupationCtrl.text.trim();
     _data.employerName = _employerCtrl.text.trim();
     _data.employerStaffId = _employerStaffIdCtrl.text.trim();
+    // Staff ID is now collected only in the Employment step; keep the legacy
+    // staffId field in sync so the backend still receives staff_id.
+    _data.staffId = _employerStaffIdCtrl.text.trim();
     _data.workAddress = _workAddressCtrl.text.trim();
     return true;
   }
@@ -504,8 +509,13 @@ class _RegistrationOnboardingScreenState
       }
 
       if (mounted) {
+        // Salary consent is mandatory only for salary-deduction members.
+        // Direct-deposit members skip consent and go to account activation.
+        final nextRoute = _data.contributionType == _ContributionType.salaryDeduction
+            ? '/salary-deduction-consent'
+            : '/account-activation';
         Navigator.of(context).pushNamed(
-          '/salary-deduction-consent',
+          nextRoute,
           arguments: combined,
         );
       }
@@ -587,7 +597,7 @@ class _RegistrationOnboardingScreenState
                     registrationData: widget.registrationData,
                     onNext: _next),
                 _PersonalInfoStep(data: _data, addressCtrl: _addressCtrl, lgaCtrl: _lgaCtrl),
-                _IdentificationStep(data: _data, idNumberCtrl: _idNumberCtrl, staffIdCtrl: _staffIdCtrl),
+                _IdentificationStep(data: _data, idNumberCtrl: _idNumberCtrl),
                 _EmploymentStep(
                     data: _data,
                     occupationCtrl: _occupationCtrl,
@@ -1047,12 +1057,10 @@ class _PersonalInfoStepState extends State<_PersonalInfoStep> {
 class _IdentificationStep extends StatefulWidget {
   final _OnboardingData data;
   final TextEditingController idNumberCtrl;
-  final TextEditingController staffIdCtrl;
 
   const _IdentificationStep({
     required this.data,
     required this.idNumberCtrl,
-    required this.staffIdCtrl,
   });
 
   @override
@@ -1136,14 +1144,6 @@ class _IdentificationStepState extends State<_IdentificationStep> {
             file: widget.data.idDocumentPhoto,
             onTap: () => _pickImage(false),
           ),
-          const SizedBox(height: 20),
-
-          // Staff ID (if employed)
-          AppTextField(
-            label: 'Staff ID Number (if employed)',
-            hint: 'Leave blank if not applicable',
-            controller: widget.staffIdCtrl,
-          ),
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.all(10),
@@ -1158,7 +1158,7 @@ class _IdentificationStepState extends State<_IdentificationStep> {
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Ensure all photos are clear, unobstructed, and taken in good lighting.',
+                    'Ensure all photos are clear, unobstructed, and taken in good lighting. Staff ID is collected in the Employment step.',
                     style: TextStyle(
                         color: CoopvestColors.info, fontSize: 11),
                   ),
