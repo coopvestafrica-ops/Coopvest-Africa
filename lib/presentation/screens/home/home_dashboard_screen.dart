@@ -257,7 +257,24 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
                       ),
                     ),
                     
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 20),
+
+                    // Quick Actions — primary member shortcuts, one tap away.
+                    Padding(
+                      padding: const EdgeInsets.only(left: 2, bottom: 10),
+                      child: Row(
+                        children: [
+                          Text(
+                            'Quick Actions',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              color: context.textPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
 
                     // Action Buttons Grid
                     GridView.count(
@@ -265,20 +282,22 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
                       physics: const NeverScrollableScrollPhysics(),
                       crossAxisCount: 4,
                       mainAxisSpacing: 12,
-                      crossAxisSpacing: 12,
-                      childAspectRatio: 0.85,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: 0.82,
                       children: [
                         _buildActionButton(
                           context,
                           'Make Contribution',
                           Icons.payments_outlined,
                           () => Navigator.push(context, MaterialPageRoute(builder: (context) => DepositScreen(userId: user?.id ?? ''))),
+                          color: CoopvestColors.primary,
                         ),
                         _buildActionButton(
                           context,
                           'Apply for Loan',
                           Icons.description_outlined,
                           () => Navigator.push(context, MaterialPageRoute(builder: (context) => LoanDashboardScreen(userId: user?.id ?? '', userName: user?.name ?? '', userPhone: user?.phone ?? ''))),
+                          color: const Color(0xFF1565C0), // matches the Loans card
                         ),
                         _buildActionButton(
                           context,
@@ -290,17 +309,19 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
                               backgroundColor: CoopvestColors.primary,
                             ),
                           ),
+                          color: const Color(0xFF00897B), // teal = growth
                         ),
                         _buildActionButton(
                           context,
                           'Download Statements',
                           Icons.assignment_outlined,
                           () => Navigator.push(context, MaterialPageRoute(builder: (context) => TransactionsHistoryScreen(userId: user?.id ?? ''))),
+                          color: const Color(0xFFF57C00), // amber = documents
                         ),
                       ],
                     ),
 
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 24),
 
                     // Recent Activity preview — what users check right after balance.
                     _buildRecentActivitySection(
@@ -774,14 +795,20 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
     );
   }
 
-  Widget _buildActionButton(BuildContext context, String label, IconData icon, VoidCallback onTap) {
+  Widget _buildActionButton(
+    BuildContext context,
+    String label,
+    IconData icon,
+    VoidCallback onTap, {
+    Color color = CoopvestColors.primary,
+  }) {
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
           decoration: BoxDecoration(
             color: context.cardBackground,
             borderRadius: BorderRadius.circular(16),
@@ -793,7 +820,7 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
               ),
             ],
             border: Border.all(
-              color: CoopvestColors.primary.withOpacity(0.1),
+              color: color.withOpacity(0.12),
               width: 1,
             ),
           ),
@@ -801,27 +828,27 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      CoopvestColors.primary.withOpacity(0.15),
-                      CoopvestColors.primary.withOpacity(0.05),
+                      color.withOpacity(0.16),
+                      color.withOpacity(0.06),
                     ],
                   ),
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(13),
                 ),
-                child: Icon(icon, color: CoopvestColors.primary, size: 24),
+                child: Icon(icon, color: color, size: 22),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Expanded(
                 child: Center(
                   child: Text(
                     label,
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: 11.5,
                       color: context.textPrimary,
                       fontWeight: FontWeight.w600,
                       height: 1.2,
