@@ -35,7 +35,10 @@ class LoanEligibilityCard extends ConsumerWidget {
     final monthsRequired = AppConfig.loanEligibilityMonths;
     final monthsLeft = (monthsRequired - monthsDone).clamp(0, monthsRequired);
     final progress = (monthsDone / monthsRequired).clamp(0.0, 1.0);
-    final isEligible = monthsDone >= monthsRequired;
+    // TESTING ONLY: 6-month contribution requirement bypassed for loan testing.
+    // Restore the original check below when testing is complete:
+    // final isEligible = monthsDone >= monthsRequired;
+    final isEligible = true;
 
     final totalSavings = walletState.wallet?.totalContributions ?? 0.0;
     final maxLoan = loanNotifier.calculateMaxLoanAmount(totalSavings);

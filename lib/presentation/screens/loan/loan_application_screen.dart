@@ -184,7 +184,10 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
         : summaryContributionMonths;
     
     // Determine eligibility
-    final isEligible = membershipMonths >= 6 && finalContributionMonths >= 6;
+    // TESTING ONLY: 6-month membership & contribution requirement bypassed for loan testing.
+    // Restore the original check below when testing is complete:
+    // final isEligible = membershipMonths >= 6 && finalContributionMonths >= 6;
+    final isEligible = true;
     
     return {
       'isEligible': isEligible,
