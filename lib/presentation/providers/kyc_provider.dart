@@ -15,26 +15,45 @@ class KYCCubit extends StateNotifier<KYCState> {
 
   KYCCubit(this._repository) : super(const KYCState());
 
-  /// Initialize KYC
+  /// Initialize KYC.
+  ///
+  /// Fetches the member's KYC status first and resolves the AuthGuard gate on
+  /// that alone. The organizations list is loaded best-effort afterwards in a
+  /// separate try/catch: the /organizations endpoint is optional (it is not a
+  /// registered backend feature flag and can return 404 "Feature not found"),
+  /// and its failure must never flip the KYC state to [KYCStatus.error] —
+  /// previously a single try/catch bundled both calls, so a 404 on
+  /// /organizations dead-ended the member on "Could not verify your KYC
+  /// status" even though /kyc/status had succeeded.
   Future<void> initializeKYC() async {
     state = state.copyWith(status: KYCStatus.loading);
-    
+
+    KYCSubmission? submission;
     try {
-      final submission = await _repository.getKYCStatus();
-      final organizations = await _repository.getOrganizations();
-      
-      state = state.copyWith(
-        status: KYCStatus.loaded,
-        submission: submission,
-        organizations: organizations,
-      );
+      submission = await _repository.getKYCStatus();
     } catch (e) {
-      logger.e('Initialize KYC error: $e');
+      logger.e('Get KYC status error: $e');
       state = state.copyWith(
         status: KYCStatus.error,
         error: e.toString(),
       );
+      return;
     }
+
+    // Best-effort: refresh the organizations list without letting its failure
+    // affect the KYC submission status that AuthGuard gates on.
+    List<Organization> organizations = const [];
+    try {
+      organizations = await _repository.getOrganizations();
+    } catch (e) {
+      logger.w('Get organizations failed (non-blocking): $e');
+    }
+
+    state = state.copyWith(
+      status: KYCStatus.loaded,
+      submission: submission,
+      organizations: organizations,
+    );
   }
 
   /// Update personal details

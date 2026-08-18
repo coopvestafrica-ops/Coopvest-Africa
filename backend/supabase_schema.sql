@@ -290,10 +290,11 @@ CREATE TABLE IF NOT EXISTS public.loans (
   remaining_balance DECIMAL(18, 2),
   remaining_months INTEGER,
   next_due_date DATE,
-  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'active', 'rejected', 'completed', 'defaulted')),
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'under_review', 'approved', 'active', 'rejected', 'completed', 'defaulted', 'in_recovery', 'cancelled')),
   approved_by UUID REFERENCES public.profiles(id),
   approved_at TIMESTAMPTZ,
   rejected_reason TEXT,
+  cancelled_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

@@ -159,7 +159,11 @@ class LoanData {
   final double remainingBalance;
   final String status;
   final String purpose;
+  final String? qrId;
   final String? qrCode;
+  final dynamic qrData;
+  final DateTime? qrExpiresAt;
+  final String? qrStatus;
   final int guarantorsAccepted;
   final int guarantorsRequired;
   final DateTime createdAt;
@@ -176,7 +180,11 @@ class LoanData {
     this.remainingBalance = 0.0,
     required this.status,
     required this.purpose,
+    this.qrId,
     this.qrCode,
+    this.qrData,
+    this.qrExpiresAt,
+    this.qrStatus,
     this.guarantorsAccepted = 0,
     this.guarantorsRequired = 3,
     required this.createdAt,
@@ -214,7 +222,13 @@ class LoanData {
           0.0,
       status: (json['status'] ?? '').toString(),
       purpose: (json['purpose'] ?? '').toString(),
-      qrCode: json['qr_code'] as String?,
+      qrId: (json['qr_id'] ?? json['qrId'])?.toString(),
+      qrCode: (json['qr_code'] ?? json['qrCode'])?.toString(),
+      qrData: json['qr_data'] ?? json['qrData'],
+      qrExpiresAt: (json['qr_expires_at'] ?? json['qrExpiresAt']) != null
+          ? DateTime.tryParse((json['qr_expires_at'] ?? json['qrExpiresAt']).toString())
+          : null,
+      qrStatus: (json['qr_status'] ?? json['qrStatus'])?.toString(),
       guarantorsAccepted: _asInt(json['guarantors_accepted']),
       guarantorsRequired: _asInt(json['guarantors_required']) > 0
           ? _asInt(json['guarantors_required'])

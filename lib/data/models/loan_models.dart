@@ -13,6 +13,11 @@ class Loan extends Equatable {
   final double totalRepayment;
   final String status; // draft, pending_guarantors, guarantors_confirmed, under_review, approved, rejected, active, repaying, completed, defaulted
   final String? purpose;
+  final String? qrId;
+  final String? qrCode;
+  final dynamic qrData;
+  final DateTime? qrExpiresAt;
+  final String? qrStatus;
   final int guarantorsAccepted;
   final int guarantorsRequired;
   final DateTime createdAt;
@@ -32,6 +37,11 @@ class Loan extends Equatable {
     required this.totalRepayment,
     required this.status,
     this.purpose,
+    this.qrId,
+    this.qrCode,
+    this.qrData,
+    this.qrExpiresAt,
+    this.qrStatus,
     required this.guarantorsAccepted,
     required this.guarantorsRequired,
     required this.createdAt,
@@ -40,6 +50,12 @@ class Loan extends Equatable {
     this.disbursedAt,
     this.remainingBalance = 0.0,
   });
+
+  /// True when this loan still has a shareable QR (saved on the backend) that
+  /// the borrower can re-display so remaining guarantors can scan it.
+  bool get hasShareableQr =>
+      (qrCode != null && qrCode!.isNotEmpty) ||
+      (qrId != null && qrId!.isNotEmpty);
 
   factory Loan.fromJson(Map<String, dynamic> json) {
     return Loan(
@@ -53,6 +69,13 @@ class Loan extends Equatable {
       totalRepayment: (json['total_repayment'] as num?)?.toDouble() ?? 0.0,
       status: json['status'] as String? ?? 'pending',
       purpose: json['purpose'] as String?,
+      qrId: (json['qr_id'] ?? json['qrId'])?.toString(),
+      qrCode: (json['qr_code'] ?? json['qrCode'])?.toString(),
+      qrData: json['qr_data'] ?? json['qrData'],
+      qrExpiresAt: (json['qr_expires_at'] ?? json['qrExpiresAt']) != null
+          ? DateTime.tryParse((json['qr_expires_at'] ?? json['qrExpiresAt']).toString())
+          : null,
+      qrStatus: (json['qr_status'] ?? json['qrStatus'])?.toString(),
       guarantorsAccepted: json['guarantors_accepted'] as int? ?? 0,
       guarantorsRequired: json['guarantors_required'] as int? ?? AppConfig.guarantorsRequired,
       createdAt: json['created_at'] != null ? DateTime.parse(json['created_at'] as String) : DateTime.now(),
@@ -81,6 +104,11 @@ class Loan extends Equatable {
       'total_repayment': totalRepayment,
       'status': status,
       'purpose': purpose,
+      'qr_id': qrId,
+      'qr_code': qrCode,
+      'qr_data': qrData,
+      'qr_expires_at': qrExpiresAt?.toIso8601String(),
+      'qr_status': qrStatus,
       'guarantors_accepted': guarantorsAccepted,
       'guarantors_required': guarantorsRequired,
       'created_at': createdAt.toIso8601String(),
@@ -102,6 +130,11 @@ class Loan extends Equatable {
     double? totalRepayment,
     String? status,
     String? purpose,
+    String? qrId,
+    String? qrCode,
+    dynamic qrData,
+    DateTime? qrExpiresAt,
+    String? qrStatus,
     int? guarantorsAccepted,
     int? guarantorsRequired,
     DateTime? createdAt,
@@ -121,6 +154,11 @@ class Loan extends Equatable {
       totalRepayment: totalRepayment ?? this.totalRepayment,
       status: status ?? this.status,
       purpose: purpose ?? this.purpose,
+      qrId: qrId ?? this.qrId,
+      qrCode: qrCode ?? this.qrCode,
+      qrData: qrData ?? this.qrData,
+      qrExpiresAt: qrExpiresAt ?? this.qrExpiresAt,
+      qrStatus: qrStatus ?? this.qrStatus,
       guarantorsAccepted: guarantorsAccepted ?? this.guarantorsAccepted,
       guarantorsRequired: guarantorsRequired ?? this.guarantorsRequired,
       createdAt: createdAt ?? this.createdAt,
@@ -164,6 +202,11 @@ class Loan extends Equatable {
     totalRepayment,
     status,
     purpose,
+    qrId,
+    qrCode,
+    qrData,
+    qrExpiresAt,
+    qrStatus,
     guarantorsAccepted,
     guarantorsRequired,
     createdAt,

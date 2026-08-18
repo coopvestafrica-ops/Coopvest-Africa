@@ -206,6 +206,12 @@ router.post(
 
 /**
  * GET /api/v1/loans
+ *
+ * Each loan is enriched with live guarantor progress and the member's saved QR
+ * code so the app can resume a "gathering guarantors" session after being
+ * closed: the progress drives "X of 3 approved", and qr_code/qr_data let the
+ * borrower re-share the same QR with the remaining guarantors without
+ * regenerating it. Batch-fetched to avoid N+1 queries.
  */
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -215,7 +221,50 @@ router.get('/', authenticate, async (req, res) => {
       .eq('profile_id', req.user.id)
       .order('created_at', { ascending: false });
     if (error) throw error;
-    res.json({ success: true, loans: data || [], total: (data || []).length });
+
+    const loans = data || [];
+
+    if (loans.length) {
+      const loanIds = loans.map((l) => l.id);
+
+      // Count consented guarantors per loan.
+      const { data: guarantorRows } = await supabase
+        .from('loan_guarantors')
+        .select('loan_id, status')
+        .in('loan_id', loanIds);
+      const consentedByLoan = {};
+      (guarantorRows || []).forEach((g) => {
+        if (g.status === 'consented') {
+          consentedByLoan[g.loan_id] = (consentedByLoan[g.loan_id] || 0) + 1;
+        }
+      });
+
+      // Fetch the latest QR row per loan (required count + the persisted QR
+      // image/data so the app can re-display it after a restart).
+      const { data: qrRows } = await supabase
+        .from('loan_qrs')
+        .select('loan_id, qr_id, qr_code, qr_data, guarantors_required, expires_at, status')
+        .in('loan_id', loanIds)
+        .order('created_at', { ascending: false });
+      const latestQrByLoan = {};
+      (qrRows || []).forEach((q) => {
+        // Keep only the most recent QR row per loan.
+        if (!latestQrByLoan[q.loan_id]) latestQrByLoan[q.loan_id] = q;
+      });
+
+      loans.forEach((l) => {
+        const qr = latestQrByLoan[l.id];
+        l.guarantors_accepted = consentedByLoan[l.id] || 0;
+        l.guarantors_required = (qr && qr.guarantors_required) || 3;
+        l.qr_id = qr ? qr.qr_id : null;
+        l.qr_code = qr ? qr.qr_code : null;
+        l.qr_data = qr ? qr.qr_data : null;
+        l.qr_expires_at = qr ? qr.expires_at : null;
+        l.qr_status = qr ? qr.status : null;
+      });
+    }
+
+    res.json({ success: true, loans, total: loans.length });
   } catch (err) {
     logger.error('Error getting loans:', err);
     res.status(500).json({ success: false, error: err.message });

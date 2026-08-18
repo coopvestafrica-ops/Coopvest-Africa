@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../config/theme_config.dart';
@@ -460,6 +461,24 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
                       ),
                     ),
                   ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: loan.hasShareableQr
+                          ? () => _showSavedQrDialog(loan)
+                          : null,
+                      icon: const Icon(Icons.qr_code_2, size: 16),
+                      label: const Text('Share QR Code'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: CoopvestColors.success,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -613,6 +632,110 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
         );
       }
     }
+  }
+
+  /// Re-display the loan's persisted QR code so the borrower can share it with
+  /// the remaining guarantors after reopening the app. The QR image is stored
+  /// on the backend as a base64 PNG data URL, so it renders directly without
+  /// regenerating it.
+  void _showSavedQrDialog(Loan loan) {
+    final qrDataUrl = loan.qrCode ?? '';
+    final isExpired =
+        loan.qrExpiresAt != null && DateTime.now().isAfter(loan.qrExpiresAt!);
+
+    ImageProvider? qrImage;
+    if (qrDataUrl.startsWith('data:image')) {
+      final b64 = qrDataUrl.substring(qrDataUrl.indexOf(',') + 1);
+      final bytes = base64Decode(b64);
+      qrImage = MemoryImage(bytes);
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Loan QR Code',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                          color: context.textPrimary,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(ctx).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${loan.guarantorsAccepted} of ${loan.guarantorsRequired} guarantors approved',
+                  style: TextStyle(color: context.textSecondary, fontSize: 13),
+                ),
+                const SizedBox(height: 16),
+                if (qrImage != null)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image(image: qrImage, width: 240, height: 240, fit: BoxFit.contain),
+                  )
+                else
+                  Container(
+                    width: 240,
+                    height: 240,
+                    color: CoopvestColors.lightGray.withOpacity(0.3),
+                    child: const Center(child: Text('QR image unavailable')),
+                  ),
+                const SizedBox(height: 16),
+                if (isExpired)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: CoopvestColors.error.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'This QR code has expired. Please start a new loan application to generate a fresh one.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: CoopvestColors.error),
+                    ),
+                  )
+                else
+                  Text(
+                    'Share this code with your ${loan.guarantorsRequired - loan.guarantorsAccepted} remaining guarantor${loan.guarantorsRequired - loan.guarantorsAccepted == 1 ? '' : 's'}. They must scan it to approve your application.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: context.textSecondary),
+                  ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: CoopvestColors.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('Done'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _buildEmptyState(BuildContext context) {
