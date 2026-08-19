@@ -416,6 +416,155 @@ router.get(
 );
 
 /**
+ * GET /api/v1/loans/:loanId/guarantors
+ * Returns the real guarantor list for a loan (name, phone, status) from
+ * loan_guarantors joined with profiles. Accessible by the borrower and by
+ * any guarantor assigned to the loan.
+ * Called by Flutter LoanDetailsScreen via LoanApiService.getLoanGuarantors.
+ */
+router.get(
+  '/:loanId/guarantors',
+  authenticate,
+  [param('loanId').notEmpty()],
+  validate,
+  async (req, res) => {
+    try {
+      const rawId = (req.params.loanId || '').trim();
+      const column = UUID_RE.test(rawId) ? 'id' : 'loan_id';
+      const { data: loan, error: loanError } = await supabase
+        .from('loans')
+        .select('id, profile_id')
+        .eq(column, rawId)
+        .maybeSingle();
+      if (loanError) throw loanError;
+      if (!loan) {
+        return res.status(404).json({ success: false, error: 'Loan not found' });
+      }
+
+      const { data: links, error } = await supabase
+        .from('loan_guarantors')
+        .select('id, guarantor_id, status, consented_at, created_at')
+        .eq('loan_id', loan.id)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+
+      const rows = links || [];
+      const isOwner = loan.profile_id === req.user.id;
+      const isGuarantor = rows.some((r) => r.guarantor_id === req.user.id);
+      if (!isOwner && !isGuarantor) {
+        return res.status(404).json({ success: false, error: 'Loan not found or access denied' });
+      }
+
+      const guarantorIds = [...new Set(rows.map((r) => r.guarantor_id).filter(Boolean))];
+      const profileMap = {};
+      if (guarantorIds.length) {
+        const { data: profiles, error: profileError } = await supabase
+          .from('profiles')
+          .select('id, name, first_name, last_name, email, phone')
+          .in('id', guarantorIds);
+        if (profileError) throw profileError;
+        for (const p of profiles || []) profileMap[p.id] = p;
+      }
+
+      const guarantors = rows.map((r) => {
+        const p = profileMap[r.guarantor_id] || {};
+        const fullName = [p.first_name, p.last_name].filter(Boolean).join(' ');
+        return {
+          id: r.id,
+          name: p.name || fullName || p.email || 'Unknown',
+          phone: p.phone || '',
+          status: r.status || 'pending',
+          confirmed_at: r.consented_at || null,
+        };
+      });
+
+      res.json({ success: true, guarantors });
+    } catch (err) {
+      logger.error('Error getting loan guarantors:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+/**
+ * Clamp a due date to the 30th of the month `installmentIndex` months after
+ * `startDate`. Months without a 30th (February) use their last day instead.
+ */
+function dueDateForInstallment(startDate, installmentIndex) {
+  const base = new Date(startDate);
+  const targetMonth = base.getMonth() + installmentIndex;
+  const year = base.getFullYear() + Math.floor(targetMonth / 12);
+  const month = ((targetMonth % 12) + 12) % 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(30, lastDay)));
+}
+
+/**
+ * GET /api/v1/loans/:loanId/repayment-schedule
+ * Builds the monthly repayment schedule for a loan. The first installment is
+ * due on the 30th of the application month (or the 30th of the following
+ * month when the application is made on/after the 30th); subsequent
+ * installments fall on the 30th of each month until the loan is fully repaid.
+ * Paid installments are derived from remaining_balance vs total_repayment.
+ * Called by Flutter LoanDetailsScreen via LoanApiService.getRepaymentSchedule.
+ */
+router.get(
+  '/:loanId/repayment-schedule',
+  authenticate,
+  [param('loanId').notEmpty()],
+  validate,
+  verifyLoanOwnership,
+  async (req, res) => {
+    try {
+      const loan = req.loan;
+      const tenure = Number(loan.tenure_months) || 0;
+      const monthly = Number(loan.monthly_repayment) || 0;
+      const principal = Number(loan.amount) || 0;
+      const totalRepayment = Number(loan.total_repayment) || monthly * tenure;
+      const remaining = Number(loan.remaining_balance ?? totalRepayment);
+      const start = loan.created_at ? new Date(loan.created_at) : new Date();
+
+      const firstIndex = start.getDate() < 30 ? 0 : 1;
+      const paidInstallments = monthly > 0
+        ? Math.min(tenure, Math.max(0, Math.floor((totalRepayment - remaining) / monthly + 1e-6)))
+        : 0;
+
+      const now = new Date();
+      const installments = [];
+      for (let i = 1; i <= tenure; i++) {
+        const dueDate = dueDateForInstallment(start, firstIndex + i - 1);
+        let status;
+        if (i <= paidInstallments) {
+          status = 'paid';
+        } else if (i === paidInstallments + 1) {
+          status = 'due';
+        } else {
+          status = dueDate < now ? 'missed' : 'upcoming';
+        }
+        installments.push({
+          installment_number: i,
+          amount: monthly,
+          due_date: dueDate.toISOString(),
+          status,
+        });
+      }
+
+      res.json({
+        success: true,
+        schedule: {
+          installments,
+          total_interest: Math.max(0, totalRepayment - principal),
+          total_principal: principal,
+        },
+      });
+    } catch (err) {
+      logger.error('Error building repayment schedule:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+/**
  * GET /api/v1/loans/:loanId/status
  * Returns the current status of a loan.
  * Called by Flutter LoanApiService to poll loan state.
