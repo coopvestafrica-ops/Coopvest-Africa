@@ -65,6 +65,21 @@ class LoanDetailsScreen extends ConsumerWidget {
     final scheduleAsync = ref.watch(loanRepaymentScheduleProvider(loanId));
     final guarantorsAsync = ref.watch(loanGuarantorsProvider(loanId));
 
+    // Next Payment Due comes from the real repayment schedule: the first
+    // unpaid installment. The Loan model's nextRepaymentDate getter is
+    // unreliable here because disbursedAt is never populated by the API.
+    final nextPaymentDueLabel = scheduleAsync.when(
+      loading: () => '...',
+      error: (_, __) => 'N/A',
+      data: (schedule) {
+        final unpaid = schedule.installments
+            .where((i) => i.status.toLowerCase() != 'paid')
+            .toList();
+        if (unpaid.isEmpty) return 'Fully repaid';
+        return _formatDate(unpaid.first.dueDate);
+      },
+    );
+
     final statusColor = _getStatusColor(loan.status);
 
     return Scaffold(
@@ -139,7 +154,7 @@ class LoanDetailsScreen extends ConsumerWidget {
                     Divider(height: 24, color: context.dividerColor),
                     _buildSummaryRow(context, 'Interest Rate', '${loan.interestRate}%'),
                     Divider(height: 24, color: context.dividerColor),
-                    _buildSummaryRow(context, 'Next Payment Due', _formatDate(loan.nextRepaymentDate) ?? 'N/A'),
+                    _buildSummaryRow(context, 'Next Payment Due', nextPaymentDueLabel),
                   ],
                 ),
               ),
