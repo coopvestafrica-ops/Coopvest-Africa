@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -99,6 +100,7 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
   String _loanId = '';
   String? _qrId; // QR ID from backend after generating QR code
   String? _qrCodeData; // Full QR code data string from backend
+  String? _qrImageDataUrl; // Backend-generated QR PNG data URL (persisted on loan_qrs)
   String? _rejectionReason;
   bool _showQrCode = false;
   bool _isSubmitting = false;
@@ -584,8 +586,16 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
         });
         
         if (qrResponse != null && qrResponse['qr'] != null) {
-          qrId = qrResponse['qr']['id'];
-          qrCodeData = qrResponse['qr']['data']; // Full JSON string from backend
+          final qr = qrResponse['qr'] as Map<String, dynamic>;
+          qrId = qr['id'] as String?;
+          // qr['data'] is a decoded JSON object (from the JSONB column), not a
+          // String — assigning it directly used to throw, silently dropping us
+          // into the local fallback QR that didn't match the persisted one.
+          final data = qr['data'];
+          qrCodeData = data is String ? data : (data != null ? jsonEncode(data) : null);
+          // The backend PNG data URL is the exact image persisted on loan_qrs,
+          // so displaying it keeps the QR identical across app restarts.
+          _qrImageDataUrl = qr['qrCode'] as String?;
         }
       } catch (e) {
         // Backend errors - continue with local fallback IDs
@@ -1147,12 +1157,27 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
                 fontWeight: FontWeight.bold,
               )),
               const SizedBox(height: 24),
-              QrImageView(
-                data: _qrDataForDisplay,
-                version: QrVersions.auto,
-                size: 200.0,
-                foregroundColor: isDarkMode ? Colors.white : Colors.black,
-              ),
+              // Show the backend-persisted QR image so the code seen right
+              // after applying is identical to the one shown after reopening
+              // the app. Fall back to a locally rendered QR only if the
+              // backend image is unavailable.
+              if (_qrImageDataUrl != null && _qrImageDataUrl!.startsWith('data:image'))
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.memory(
+                    base64Decode(_qrImageDataUrl!.substring(_qrImageDataUrl!.indexOf(',') + 1)),
+                    width: 200,
+                    height: 200,
+                    fit: BoxFit.contain,
+                  ),
+                )
+              else
+                QrImageView(
+                  data: _qrDataForDisplay,
+                  version: QrVersions.auto,
+                  size: 200.0,
+                  foregroundColor: isDarkMode ? Colors.white : Colors.black,
+                ),
               const SizedBox(height: 16),
               Text(_formattedLoanId, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               const SizedBox(height: 8),

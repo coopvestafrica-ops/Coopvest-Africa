@@ -147,6 +147,40 @@ router.post(
       const { applicantName, applicantPhone, options } = req.body;
       const loan = req.loan;
 
+      // Idempotency: reuse the loan's existing unexpired QR instead of minting
+      // a new one, so the borrower always sees (and guarantors always scan)
+      // the same code across app restarts and retries.
+      const { data: existingQr, error: existingQrError } = await supabase
+        .from('loan_qrs')
+        .select('*')
+        .eq('loan_id', loan.id)
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existingQrError) throw existingQrError;
+
+      if (existingQr) {
+        const found = existingQr.guarantors_found || 0;
+        const required = existingQr.guarantors_required || 3;
+        return res.json({
+          success: true,
+          message: 'Existing QR code returned.',
+          qr: {
+            id: existingQr.qr_id,
+            loanId,
+            expiresAt: existingQr.expires_at,
+            qrCode: existingQr.qr_code,
+            data: existingQr.qr_data,
+          },
+          progress: {
+            found,
+            required,
+            percentage: required > 0 ? Math.round((found / required) * 100) : 0,
+          },
+        });
+      }
+
       const qrResult = await qrCodeService.generateLoanQRCode(
         {
           loanId,
