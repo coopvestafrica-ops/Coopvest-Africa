@@ -55,6 +55,7 @@ const announcementRoutes = require('./routes/announcements');
 const contributionRoutes = require('./routes/contributions');
 const documentRoutes = require('./routes/documents');
 const terminationRoutes = require('./routes/termination');
+const adminTerminationRoutes = require('./routes/adminTermination');
 const featuresRoutes = require('./routes/features');
 
 // Import middleware
@@ -262,6 +263,9 @@ app.use('/api/v1/guarantor', guarantorRoutes);
 app.use('/api/v1/announcements', announcementRoutes);
 app.use('/api/v1/contributions', contributionRoutes);
 app.use('/api/v1/documents', documentRoutes);
+app.use('/api/v1/admin-termination', adminTerminationRoutes);
+// Admin portal path (mounted under the /api/admin prefix the dashboard uses).
+app.use('/api/admin/termination', adminTerminationRoutes);
 app.use('/api/v1/termination', terminationRoutes);
 app.use('/api/v1/payment-proofs', paymentProofRoutes);
 

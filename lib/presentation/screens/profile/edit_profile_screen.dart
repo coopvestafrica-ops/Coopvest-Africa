@@ -29,7 +29,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     _nameController = TextEditingController(text: user?.name ?? '');
     _emailController = TextEditingController(text: user?.email ?? '');
     _phoneController = TextEditingController(text: user?.phone ?? '');
-    _addressController = TextEditingController(text: '');
+    _addressController = TextEditingController(text: user?.address ?? '');
   }
 
   @override
@@ -50,6 +50,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       await ref.read(authProvider.notifier).updateProfile(
         name: _nameController.text.trim(),
         phone: _phoneController.text.trim(),
+        address: _addressController.text.trim(),
       );
 
       if (mounted) {
@@ -122,9 +123,9 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              TextButton(
-                onPressed: () {},
-                child: const Text('Change Profile Picture'),
+              Text(
+                'To change your photo, use the camera icon on the Profile page',
+                style: TextStyle(fontSize: 12, color: context.textSecondary),
               ),
               const SizedBox(height: 24),
 
@@ -148,15 +149,8 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                 hint: 'Enter your email',
                 controller: _emailController,
                 keyboardType: TextInputType.emailAddress,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your email';
-                  }
-                  if (!value.contains('@')) {
-                    return 'Please enter a valid email';
-                  }
-                  return null;
-                },
+                // Email is the sign-in identity and cannot be changed here.
+                readOnly: true,
               ),
               const SizedBox(height: 16),
 

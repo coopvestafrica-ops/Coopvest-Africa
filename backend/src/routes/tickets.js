@@ -32,7 +32,10 @@ const TICKET_CATEGORIES = [
   'referral_bonus',
   'repayment_issue',
   'account_kyc',
+  'contribution',
+  'withdrawal',
   'technical_bug',
+  'complaint',
   'other',
 ];
 

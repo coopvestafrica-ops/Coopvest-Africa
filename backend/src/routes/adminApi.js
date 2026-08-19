@@ -613,7 +613,7 @@ router.get('/support', async (req, res) => {
     
     let query = supabase
       .from('tickets')
-      .select('*', { count: 'exact' })
+      .select('*, profile:profiles(id, user_id, name, email)', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(from, to);
     
@@ -622,15 +622,162 @@ router.get('/support', async (req, res) => {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    res.json({ 
-      success: true, 
-      data: data || [],
-      pagination: { page, limit, total: count || 0 } 
+    // Shape rows the way the admin portal's Support page expects them.
+    const tickets = (data || []).map((t) => ({
+      id: t.id,
+      ticketId: t.ticket_id,
+      memberId: t.profile_id,
+      memberName: t.profile?.name || t.profile?.email || 'Member',
+      memberEmail: t.profile?.email || null,
+      subject: t.title,
+      description: t.description,
+      category: t.category,
+      status: t.status,
+      priority: t.priority || 'medium',
+      createdAt: t.created_at,
+      updatedAt: t.updated_at || t.created_at,
+    }));
+
+    res.json({
+      success: true,
+      data: tickets,
+      pagination: { page, limit, total: count || 0 }
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+/**
+ * GET /api/admin/support/:id
+ * Single ticket with its full message thread (admin view).
+ */
+router.get('/support/:id', [param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const { data: ticket, error } = await supabase
+      .from('tickets')
+      .select('*, profile:profiles(id, user_id, name, email)')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
+
+    const { data: messages, error: mErr } = await supabase
+      .from('ticket_messages')
+      .select('*')
+      .eq('ticket_id', ticket.id)
+      .order('created_at', { ascending: true });
+    if (mErr) throw mErr;
+
+    res.json({
+      success: true,
+      data: {
+        ...ticket,
+        messages: (messages || []).map((m) => ({
+          id: m.id,
+          senderId: m.author_id,
+          senderType: m.author_id && m.author_id === ticket.profile_id ? 'user' : 'admin',
+          message: m.body,
+          createdAt: m.created_at,
+        })),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/admin/support/:id/reply
+ * Admin reply — stored with the schema's author_id/author_role columns so the
+ * member's app can read it back.
+ */
+router.post(
+  '/support/:id/reply',
+  [param('id').isUUID(), body('message').isString().isLength({ min: 1, max: 5000 })],
+  validate,
+  async (req, res) => {
+    try {
+      const { data: msg, error } = await supabase
+        .from('ticket_messages')
+        .insert({
+          ticket_id: req.params.id,
+          author_id: req.user.id,
+          author_role: 'staff',
+          body: req.body.message,
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+
+      await supabase
+        .from('tickets')
+        .update({ status: 'awaiting_user', updated_at: new Date().toISOString() })
+        .eq('id', req.params.id);
+
+      res.status(201).json({
+        success: true,
+        data: {
+          id: msg.id,
+          senderId: msg.author_id,
+          senderType: 'admin',
+          message: msg.body,
+          createdAt: msg.created_at,
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+/**
+ * POST /api/admin/support/:id/resolve
+ */
+router.post('/support/:id/resolve', [param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const now = new Date().toISOString();
+    const { data: ticket, error } = await supabase
+      .from('tickets')
+      .update({ status: 'resolved', resolved_at: now, resolved_by: req.user.id, updated_at: now })
+      .eq('id', req.params.id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    res.json({ success: true, data: { id: ticket.id, status: ticket.status } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/admin/support/:id/status
+ * Body: { status } — must satisfy the tickets.status CHECK constraint.
+ */
+router.post(
+  '/support/:id/status',
+  [param('id').isUUID(), body('status').isIn(['open', 'in_progress', 'awaiting_user', 'resolved', 'closed'])],
+  validate,
+  async (req, res) => {
+    try {
+      const update = { status: req.body.status, updated_at: new Date().toISOString() };
+      if (req.body.status === 'resolved') {
+        update.resolved_at = update.updated_at;
+        update.resolved_by = req.user.id;
+      }
+      const { data: ticket, error } = await supabase
+        .from('tickets')
+        .update(update)
+        .eq('id', req.params.id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      res.json({ success: true, data: { id: ticket.id, status: ticket.status } });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
 
 /**
  * GET /api/v1/admin/interest-rates
