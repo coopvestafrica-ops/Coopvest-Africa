@@ -25,18 +25,25 @@ class KYCCubit extends StateNotifier<KYCState> {
   /// previously a single try/catch bundled both calls, so a 404 on
   /// /organizations dead-ended the member on "Could not verify your KYC
   /// status" even though /kyc/status had succeeded.
-  Future<void> initializeKYC() async {
-    state = state.copyWith(status: KYCStatus.loading);
+  /// With [silent] the global status is left untouched while fetching — used
+  /// for background retries so a failing backend cannot flick the UI between
+  /// the loading spinner and the dashboard.
+  Future<void> initializeKYC({bool silent = false}) async {
+    if (!silent) {
+      state = state.copyWith(status: KYCStatus.loading);
+    }
 
     KYCSubmission? submission;
     try {
       submission = await _repository.getKYCStatus();
     } catch (e) {
       logger.e('Get KYC status error: $e');
-      state = state.copyWith(
-        status: KYCStatus.error,
-        error: e.toString(),
-      );
+      if (!silent) {
+        state = state.copyWith(
+          status: KYCStatus.error,
+          error: e.toString(),
+        );
+      }
       return;
     }
 

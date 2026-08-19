@@ -27,6 +27,23 @@ class AuthGuard extends ConsumerStatefulWidget {
 
 class _AuthGuardState extends ConsumerState<AuthGuard> {
   bool _kycInitialized = false;
+  bool _silentRetryScheduled = false;
+  int _silentRetryCount = 0;
+  static const int _maxSilentRetries = 3;
+
+  /// Retry the KYC fetch quietly after a delay (gives a cold-starting backend
+  /// time to wake). Silent retries never toggle the provider's loading status,
+  /// so the dashboard stays on screen instead of flashing a spinner.
+  void _scheduleSilentKycRetry() {
+    if (_silentRetryScheduled || _silentRetryCount >= _maxSilentRetries) return;
+    _silentRetryScheduled = true;
+    Future.delayed(const Duration(seconds: 8), () async {
+      _silentRetryScheduled = false;
+      if (!mounted) return;
+      _silentRetryCount++;
+      await ref.read(kycProvider.notifier).initializeKYC(silent: true);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -79,11 +96,13 @@ class _AuthGuardState extends ConsumerState<AuthGuard> {
           profileStatus == 'rejected' ||
           profileStatus == 'unknown'; // backend unreachable — don't block
       if (profileSubmitted) {
-        // Retry the KYC fetch in the background so the submission status
-        // refreshes once the backend is reachable again, without blocking UI.
-        Future.microtask(() {
-          if (mounted) ref.read(kycProvider.notifier).initializeKYC();
-        });
+        // Let the member straight through and refresh the KYC status via a
+        // bounded, delayed, SILENT retry. The old per-build microtask retry
+        // re-entered initializeKYC on every frame: each attempt flipped the
+        // provider to loading (spinner) then back to error (dashboard),
+        // trapping the app in a white-screen ↔ dashboard flicker loop after
+        // every cold start while the backend was unreachable.
+        _scheduleSilentKycRetry();
         return widget.child;
       }
       // Profile itself says pending AND we couldn't confirm via the KYC
