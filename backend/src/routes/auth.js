@@ -10,7 +10,7 @@ const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const supabase = require('../config/supabase');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, decodeSessionId } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
 const validate = (req, res, next) => {
@@ -552,7 +552,7 @@ router.get('/profile-completeness', authenticate, async (req, res) => {
 // Called by the Flutter app after Supabase sign-in to upsert the profile row
 // and return the latest user payload. Returns { success, user, token }.
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/sync', authenticate, async (req, res) => {
+router.post('/sync', (req, res, next) => { req.skipSingleSessionCheck = true; next(); }, authenticate, async (req, res) => {
   try {
     const { name, phone } = req.body;
     const profileId = req.user.id;
@@ -560,6 +560,13 @@ router.post('/sync', authenticate, async (req, res) => {
     const updateData = { updated_at: new Date().toISOString() };
     if (name) updateData.name = name;
     if (phone) updateData.phone = phone;
+
+    // Single-device login: this is the endpoint the app hits right after a
+    // fresh sign-in, so claim the active session here. Any other device still
+    // holding a token from an older session gets signed out by the auth
+    // middleware on its next request.
+    const sessionId = decodeSessionId(req.token);
+    if (sessionId) updateData.active_session_id = sessionId;
 
     const { data: profile, error } = await supabase
       .from('profiles')

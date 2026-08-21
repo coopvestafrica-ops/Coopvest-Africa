@@ -14,6 +14,7 @@ const supabase = require('../config/supabase');
 const { requireAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
+const notifyService = require('../services/notifyService');
 
 router.use(requireAdmin);
 
@@ -102,6 +103,28 @@ router.post(
         .from('tickets')
         .update({ status: 'awaiting_user', updated_at: new Date().toISOString() })
         .eq('id', req.params.id);
+
+      // Notify the member that support replied to their live-chat ticket.
+      try {
+        const { data: ticket } = await supabase
+          .from('tickets')
+          .select('profile_id, subject')
+          .eq('id', req.params.id)
+          .maybeSingle();
+        if (ticket && ticket.profile_id) {
+          const preview = String(req.body.body || '').slice(0, 120);
+          await notifyService.sendInApp({
+            profileId: ticket.profile_id,
+            title: '💬 New reply from support',
+            body: preview,
+            type: 'system',
+            category: 'info',
+          });
+        }
+      } catch (e) {
+        logger.warn('admin ticket reply notify failed:', e.message);
+      }
+
       res.status(201).json({ success: true, message: msg });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });

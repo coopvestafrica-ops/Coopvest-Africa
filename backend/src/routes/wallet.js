@@ -158,6 +158,7 @@ router.get('/balance', authenticate, async (req, res) => {
       logger.warn('wallet balance: savings lookup failed:', sErr.message);
     }
 
+    // Total confirmed contributions = sum of successful contribution records.
     try {
       const { data: contribRows } = await supabase
         .from('contributions')
@@ -256,12 +257,11 @@ router.post(
     body('sender_account_name').optional().isString(),
     body('sender_account_number').optional().isString(),
     body('proof_url').optional().isURL(),
-    body('payment_type').optional().isIn(['monthly_contribution', 'loan_repayment', 'overdue_payment', 'fine']),
   ],
   validate,
   async (req, res) => {
     try {
-      const { amount, description, payment_reference, payment_date, bank_name, sender_account_name, sender_account_number, proof_url, payment_type } = req.body;
+      const { amount, description, payment_reference, payment_date, bank_name, sender_account_name, sender_account_number, proof_url } = req.body;
 
       // Create a PENDING transaction (no wallet credit yet)
       const txn = await recordTransaction(req.user.id, {
@@ -292,7 +292,6 @@ router.post(
             sender_account_name: sender_account_name || null,
             sender_account_number: sender_account_number || null,
             payment_proof_url: proof_url || null,
-            payment_type: payment_type || 'monthly_contribution',
           })
           .select('*')
           .single();
@@ -303,6 +302,31 @@ router.post(
         }
       } catch (drErr) {
         logger.warn('deposit_requests table error (non-fatal):', drErr.message);
+      }
+
+      // Mirror the attached proof into payment_proofs so the member can see it
+      // under "My Proofs". Non-fatal: the deposit itself must never be blocked.
+      if (proof_url) {
+        try {
+          await supabase.from('payment_proofs').insert({
+            profile_id: req.user.id,
+            payment_type: 'monthly_contribution',
+            amount: Number(amount),
+            currency: 'NGN',
+            payment_date: payment_date || new Date().toISOString(),
+            payment_method: 'bank_transfer',
+            transaction_reference: payment_reference || null,
+            receiving_bank: bank_name || null,
+            bank_account_name: sender_account_name || null,
+            bank_account_number: sender_account_number || null,
+            proof_url,
+            proof_type: 'image',
+            member_note: description || 'Deposit with attached proof',
+            status: 'pending',
+          });
+        } catch (ppErr) {
+          logger.warn('payment_proofs mirror insert failed (non-fatal):', ppErr.message);
+        }
       }
 
       logger.info(`Deposit request submitted for user ${req.user.id}: ₦${amount}`);
@@ -607,22 +631,8 @@ router.post('/upload-proof', authenticate, upload.single('proof'), async (req, r
       .from('deposit-proofs')
       .getPublicUrl(storagePath);
 
-    // Also generate a signed URL so proofs are viewable even when the storage
-    // bucket is private. Signed URLs are valid for 10 years (effectively permanent).
-    let proofUrl = publicUrl;
-    try {
-      const { data: signed, error: signedErr } = await supabase.storage
-        .from('deposit-proofs')
-        .createSignedUrl(storagePath, 60 * 60 * 24 * 365 * 10);
-      if (!signedErr && signed && signed.signedUrl) {
-        proofUrl = signed.signedUrl;
-      }
-    } catch (signedErr) {
-      logger.warn('signed URL generation failed, falling back to public URL:', signedErr.message);
-    }
-
     logger.info(`Deposit proof uploaded for user ${req.user.id}: ${storagePath}`);
-    res.json({ success: true, url: proofUrl, publicUrl });
+    res.json({ success: true, url: publicUrl });
   } catch (err) {
     logger.error('upload-proof error:', err);
     res.status(500).json({ success: false, message: err.message || 'Upload failed.' });

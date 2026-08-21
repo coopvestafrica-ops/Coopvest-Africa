@@ -16,6 +16,22 @@ const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
 
 /**
+ * Extract the Supabase session_id from an already-verified JWT payload.
+ * Signature validation is done by supabase.auth.getUser, so a plain decode
+ * of the payload segment is sufficient here.
+ */
+function decodeSessionId(token) {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+    const json = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    return json.session_id || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * Verify a Supabase Bearer token and return the matching profile row.
  * Throws if the token is invalid or the profile is missing.
  */
@@ -27,7 +43,7 @@ async function verifyToken(token) {
 
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('id, user_id, email, name, role, is_active, is_flagged')
+    .select('id, user_id, email, name, role, is_active, is_flagged, active_session_id')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -96,6 +112,21 @@ const authenticate = async (req, res, next) => {
 
     if (profile.is_active === false) {
       return res.status(403).json({ success: false, error: 'Account is disabled' });
+    }
+
+    // Single-device enforcement: /auth/sync claims profiles.active_session_id
+    // on every fresh login, so a session claimed by a newer login on another
+    // device no longer matches and gets signed out here. Profiles with no
+    // claimed session yet (active_session_id IS NULL) are left alone.
+    // The claim endpoint itself (/auth/sync) sets req.skipSingleSessionCheck
+    // so a brand-new session can pass through and claim the session.
+    const tokenSessionId = decodeSessionId(token);
+    if (!req.skipSingleSessionCheck && profile.active_session_id && tokenSessionId && profile.active_session_id !== tokenSessionId) {
+      return res.status(401).json({
+        success: false,
+        error: 'You have been signed in on another device. Please log in again.',
+        code: 'SESSION_REPLACED',
+      });
     }
 
     req.user = {
@@ -190,4 +221,5 @@ module.exports = {
   optionalAuth,
   requireAdmin,
   requireService,
+  decodeSessionId,
 };

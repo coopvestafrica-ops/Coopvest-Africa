@@ -494,7 +494,7 @@ router.get(
       if (guarantorIds.length) {
         const { data: profiles, error: profileError } = await supabase
           .from('profiles')
-          .select('id, name, first_name, last_name, email, phone')
+          .select('id, name, email, phone')
           .in('id', guarantorIds);
         if (profileError) throw profileError;
         for (const p of profiles || []) profileMap[p.id] = p;
@@ -502,10 +502,9 @@ router.get(
 
       const guarantors = rows.map((r) => {
         const p = profileMap[r.guarantor_id] || {};
-        const fullName = [p.first_name, p.last_name].filter(Boolean).join(' ');
         return {
           id: r.id,
-          name: p.name || fullName || p.email || 'Unknown',
+          name: p.name || p.email || 'Unknown',
           phone: p.phone || '',
           status: r.status || 'pending',
           confirmed_at: r.consented_at || null,

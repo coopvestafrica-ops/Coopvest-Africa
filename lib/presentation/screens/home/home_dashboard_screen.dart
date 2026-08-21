@@ -18,6 +18,7 @@ import '../../../presentation/providers/loan_provider.dart';
 import '../../../presentation/providers/contributions/contribution_provider.dart';
 import '../../../presentation/providers/insights_provider.dart';
 import '../../../presentation/providers/notifications_provider.dart';
+import 'notifications_screen.dart';
 import '../../../core/services/realtime_notification_service.dart';
 import '../../../data/models/notification_models.dart';
 import '../../../presentation/providers/deposit_history_provider.dart';
@@ -278,47 +279,43 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
                       ),
                     ),
 
-                    // Action Buttons Grid
-                    GridView.count(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      crossAxisCount: 4,
-                      mainAxisSpacing: 12,
-                      crossAxisSpacing: 10,
-                      childAspectRatio: 0.82,
+                    // Action Buttons Row — 3 evenly-sized cards that fill the row.
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _buildActionButton(
-                          context,
-                          'Make Contribution',
-                          Icons.payments_outlined,
-                          () => Navigator.push(context, MaterialPageRoute(builder: (context) => DepositScreen(userId: user?.id ?? ''))),
-                          color: CoopvestColors.primary,
-                        ),
-                        _buildActionButton(
-                          context,
-                          'Apply for Loan',
-                          Icons.description_outlined,
-                          () => Navigator.push(context, MaterialPageRoute(builder: (context) => LoanDashboardScreen(userId: user?.id ?? '', userName: user?.name ?? '', userPhone: user?.phone ?? ''))),
-                          color: const Color(0xFF1565C0), // matches the Loans card
-                        ),
-                        _buildActionButton(
-                          context,
-                          'Investment Pool',
-                          Icons.trending_up_outlined,
-                          () => ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: const Text('Investment Pool coming soon'),
-                              backgroundColor: CoopvestColors.primary,
-                            ),
+                        Expanded(
+                          child: _buildActionButton(
+                            context,
+                            'Make Contribution',
+                            Icons.payments_outlined,
+                            () => Navigator.push(context, MaterialPageRoute(builder: (context) => DepositScreen(userId: user?.id ?? ''))),
+                            color: CoopvestColors.primary,
                           ),
-                          color: const Color(0xFF00897B), // teal = growth
                         ),
-                        _buildActionButton(
-                          context,
-                          'Download Statements',
-                          Icons.assignment_outlined,
-                          () => Navigator.push(context, MaterialPageRoute(builder: (context) => TransactionsHistoryScreen(userId: user?.id ?? ''))),
-                          color: const Color(0xFFF57C00), // amber = documents
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _buildActionButton(
+                            context,
+                            'Apply for Loan',
+                            Icons.description_outlined,
+                            () => Navigator.push(context, MaterialPageRoute(builder: (context) => LoanDashboardScreen(userId: user?.id ?? '', userName: user?.name ?? '', userPhone: user?.phone ?? ''))),
+                            color: const Color(0xFF1565C0), // matches the Loans card
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _buildActionButton(
+                            context,
+                            'Investment Pool',
+                            Icons.trending_up_outlined,
+                            () => ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: const Text('Investment Pool coming soon'),
+                                backgroundColor: CoopvestColors.primary,
+                              ),
+                            ),
+                            color: const Color(0xFF00897B), // teal = growth
+                          ),
                         ),
                       ],
                     ),
@@ -448,16 +445,19 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
               Row(
                 children: [
                   // Notification bell
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.notifications_outlined,
-                      color: Colors.white,
-                      size: 22,
+                  GestureDetector(
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const NotificationsScreen())),
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.notifications_outlined,
+                        color: Colors.white,
+                        size: 22,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -850,7 +850,8 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
                 child: Icon(icon, color: color, size: 22),
               ),
               const SizedBox(height: 8),
-              Expanded(
+              SizedBox(
+                height: 32,
                 child: Center(
                   child: Text(
                     label,
@@ -1516,7 +1517,10 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen>
                 _formatTimeAgo(notification.timestamp),
                 icon,
                 CoopvestColors.primary,
-                () {},
+                () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+                ),
               ),
             );
           }),
