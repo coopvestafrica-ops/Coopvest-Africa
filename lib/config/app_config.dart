@@ -19,9 +19,20 @@ class AppConfig {
   static const Duration tokenRefreshThreshold = Duration(minutes: 5);
 
   // Loan Configuration
-  // NOTE: Loan eligibility is now calculated based on 3x total savings
-  // See: LoanProvider for dynamic loan limit calculation
-  static const double loanMultiplier = 3.0; // Members can borrow 3x their savings
+  // NOTE: Loan limits are savings-based per product (enforced server-side):
+  //   Quick/Flexi/Stable loans: 3x total savings
+  //   Premium Loan: 4x total savings
+  //   Maxi Loan: 5x total savings
+  // [loanMultiplier] is the generic/default multiplier used for estimates.
+  static const double loanMultiplier = 3.0; // Default: 3x savings
+  static const Map<String, double> loanMultipliers = {
+    'Quick Loan': 3.0,
+    'Flexi Loan': 3.0,
+    'Stable Loan (12 months)': 3.0,
+    'Stable Loan (18 months)': 3.0,
+    'Premium Loan': 4.0,
+    'Maxi Loan': 5.0,
+  };
   static const int loanEligibilityMonths = 0; // TEMP: set to 0 for testing (restore to 6)
   static const List<int> loanTenures = [3, 6, 12];
   static const double baseInterestRate = 10.0;

@@ -20,6 +20,9 @@ const governance = require('./governance');
 const referralService = require('../services/referralService');
 const adminPlatform = require('./adminPlatform');
 const notifyService = require('../services/notifyService');
+const approvalMatrix = require('../lib/approvalMatrix');
+const approvalRequests = require('../lib/approvalRequests');
+const riskScoring = require('../lib/riskScoring');
 
 /** Notify the loan's borrower of an approve/reject decision. Never throws. */
 async function notifyBorrowerOfDecision(loan, approve, reason) {
@@ -690,11 +693,72 @@ router.get('/loans', async (req, res) => {
       loansArr.forEach((l) => { if (l.approved_by) l.approvedBy = approverMap[l.approved_by] || 'Unknown Admin'; });
     }
 
+    // Attach a borrower risk snapshot to each loan for the review UI
+    // (Policy: Risk Assessment — considered during loan review).
+    try {
+      const borrowerIds = [...new Set(loansArr.map((l) => l.profile_id).filter(Boolean))];
+      const riskMap = await riskScoring.computeRiskScores(borrowerIds);
+      loansArr.forEach((l) => {
+        const r = riskMap[l.profile_id];
+        if (r) l.borrowerRisk = { score: r.score, riskLevel: r.riskLevel, factors: r.factors };
+      });
+    } catch (riskErr) {
+      logger.warn('loans list risk scoring failed:', riskErr.message);
+    }
+
     res.json({ success: true, data: loansArr, loans: loansArr, total: count || 0, page, limit, pagination: { page, limit, total: count || 0 } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+/**
+ * Maker-checker gate (Policy: Admin Approval). Returns true when the approval
+ * was routed to the Approval Center instead of being executed — the response
+ * has already been sent in that case.
+ */
+async function routeToApprovalCenterIfRequired(req, res, loan) {
+  const amount = Number(loan.amount || 0);
+  const role = req.user?.role || 'staff';
+  if (!(await approvalMatrix.requiresSuperAdminApproval(role, amount))) return false;
+
+  const existing = await approvalRequests.findPendingLoanApproval(loan.id);
+  if (existing) {
+    res.status(409).json({
+      success: false,
+      code: 'APPROVAL_ALREADY_PENDING',
+      error: 'This loan already has a pending Super Admin approval request.',
+      approvalRequestId: existing.id,
+    });
+    return true;
+  }
+
+  const borrowerName = loan.profile?.name || loan.profile?.email || loan.profile_id;
+  const request = await approvalRequests.createApprovalRequest({
+    requestType: 'loan_approval',
+    title: `Loan approval: ₦${amount.toLocaleString()} for ${borrowerName}`,
+    payload: {
+      loanId: loan.id,
+      loanReference: loan.loan_id || null,
+      memberProfileId: loan.profile_id,
+      memberName: borrowerName,
+      loanType: loan.loan_type || null,
+      amount,
+      tenureMonths: loan.tenure_months ?? null,
+    },
+    reason: req.body?.reason || null,
+    thresholdValue: approvalMatrix.maxApprovableAmount(role, await approvalMatrix.getThresholds()),
+    user: req.user,
+  });
+  await logAdminAction('LOAN_APPROVAL_ROUTED', { model: 'Loan', id: loan.id }, { amount, adminId: req.user?.id, approvalRequestId: request.id });
+  res.status(202).json({
+    success: true,
+    pendingApproval: true,
+    approvalRequestId: request.id,
+    message: 'This loan exceeds your approval limit. It has been sent to the Approval Center for Super Admin approval.',
+  });
+  return true;
+}
 
 /**
  * POST /api/admin/loans/:id/decision
@@ -718,6 +782,17 @@ router.post(
       const reason = req.body.reason || null;
       const adminId = req.user?.id || null;
 
+      if (approve) {
+        const { data: loan, error: fetchErr } = await supabase
+          .from('loans')
+          .select('*, profile:profiles!profile_id(name, email)')
+          .eq('id', req.params.id)
+          .maybeSingle();
+        if (fetchErr) throw fetchErr;
+        if (!loan) return res.status(404).json({ success: false, error: 'Loan not found' });
+        if (await routeToApprovalCenterIfRequired(req, res, loan)) return;
+      }
+
       const update = approve
         ? { status: 'approved', approved_by: adminId, approved_at: now, rejected_reason: null, rejected_by: null, updated_at: now }
         : { status: 'rejected', rejected_reason: reason, rejected_by: adminId, approved_by: null, approved_at: null, updated_at: now };
@@ -740,6 +815,53 @@ router.post(
 );
 
 /**
+ * POST /api/admin/loans/:id/request-info
+ * Ask the borrower for additional information before a decision can be made.
+ */
+router.post(
+  '/loans/:id/request-info',
+  [body('message').isString().isLength({ min: 3, max: 1000 })],
+  validate,
+  async (req, res) => {
+    try {
+      const now = new Date().toISOString();
+      const message = req.body.message;
+
+      let update = { status: 'info_requested', updated_at: now, info_requested_reason: message };
+      let { data, error } = await supabase
+        .from('loans')
+        .update(update)
+        .eq('id', req.params.id)
+        .select('*')
+        .maybeSingle();
+      if (error && /Could not find the .* column|column .* does not exist/i.test(error.message || '')) {
+        // info_requested_reason requires migration 019
+        delete update.info_requested_reason;
+        ({ data, error } = await supabase.from('loans').update(update).eq('id', req.params.id).select('*').maybeSingle());
+      }
+      if (error) throw error;
+      if (!data) return res.status(404).json({ success: false, error: 'Loan not found' });
+
+      await logAdminAction('LOAN_INFO_REQUESTED', { model: 'Loan', id: data.id }, { message, adminId: req.user?.id });
+      try {
+        await notifyService.sendInApp({
+          profileId: data.profile_id,
+          title: 'Information Needed for Your Loan Application',
+          body: `Our team needs more information to process your loan application: ${message}`,
+          type: 'loan',
+          category: 'warning',
+        });
+      } catch (e) {
+        logger.warn('request-info notification failed:', e.message);
+      }
+      res.json({ success: true, loan: data, data });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+/**
  * POST /api/admin/loans/:id/approve
  * Convenience alias so the Admin Dashboard frontend (which calls
  * `/api/loans/:id/approve`) can approve without reshaping the request.
@@ -750,6 +872,16 @@ router.post('/loans/:id/approve', async (req, res) => {
   try {
     const now = new Date().toISOString();
     const adminId = req.user?.id || null;
+
+    const { data: loan, error: fetchErr } = await supabase
+      .from('loans')
+      .select('*, profile:profiles!profile_id(name, email)')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!loan) return res.status(404).json({ success: false, error: 'Loan not found' });
+    if (await routeToApprovalCenterIfRequired(req, res, loan)) return;
+
     const { data, error } = await supabase
       .from('loans')
       .update({ status: 'approved', approved_by: adminId, approved_at: now, rejected_reason: null, rejected_by: null, updated_at: now })
@@ -935,7 +1067,9 @@ router.get('/notifications', async (req, res) => {
 
 /**
  * GET /api/admin/risk-scoring
- * Computes a per-member risk score from loans, savings and KYC signals.
+ * Computes a per-member risk score from loans, savings, contribution
+ * consistency, repayment behavior, guarantor exposure, employment, KYC and
+ * fraud flags (see lib/riskScoring.js).
  */
 router.get('/risk-scoring', async (req, res) => {
   try {
@@ -948,46 +1082,19 @@ router.get('/risk-scoring', async (req, res) => {
       .order('created_at', { ascending: false });
     if (pErr) throw pErr;
 
-    const { data: loans, error: lErr } = await supabase
-      .from('loans')
-      .select('id, profile_id, amount, status');
-    if (lErr) throw lErr;
-
-    const loansByProfile = (loans || []).reduce((acc, l) => {
-      const pid = l.profile_id;
-      if (!pid) return acc;
-      (acc[pid] = acc[pid] || []).push(l);
-      return acc;
-    }, {});
+    const riskMap = await riskScoring.computeRiskScores((profiles || []).map((p) => p.id));
 
     const members = (profiles || []).map((p) => {
-      const pLoans = loansByProfile[p.id] || [];
-      const activeLoans = pLoans.filter((l) => ['active', 'approved', 'disbursed'].includes(l.status)).length;
-      const defaultedLoans = pLoans.filter((l) => l.status === 'defaulted').length;
-      const totalBalance = pLoans
-        .filter((l) => ['active', 'disbursed'].includes(l.status))
-        .reduce((s, l) => s + Number(l.amount || 0), 0);
-
-      let score = 100;
-      score -= activeLoans * 5;
-      score -= defaultedLoans * 25;
-      if (p.kyc_verified === false) score -= 15;
-      if (defaultedLoans > 0) score -= 15;
-      score = Math.max(0, Math.min(100, score));
-
-      const riskLevel = score >= 80 ? 'low' : score >= 60 ? 'medium' : 'high';
+      const r = riskMap[p.id] || { score: 0, riskLevel: 'high', factors: {} };
       return {
         id: p.id,
         memberId: p.user_id || p.id,
         memberName: p.name || p.email || 'Unknown',
-        score,
-        riskLevel,
+        score: r.score,
+        riskLevel: r.riskLevel,
         factors: {
-          activeLoans,
-          defaultedLoans,
-          totalBalance,
-          isFlagged: defaultedLoans > 0,
-          kycVerified: p.kyc_verified === true,
+          ...r.factors,
+          totalBalance: r.factors.outstandingBalance || 0,
         },
         lastUpdated: new Date().toISOString(),
       };

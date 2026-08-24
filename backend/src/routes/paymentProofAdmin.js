@@ -486,6 +486,34 @@ router.post(
           // be reconciled later. The proof is already marked approved.
           logger.error('Apply loan repayment effect failed (non-fatal):', applyErr.message);
         }
+
+        // Lift the system default-flag once the member no longer has any
+        // overdue/defaulted/in-recovery loans (Policy: Active Default
+        // Restriction). Manual fraud flags (other flag_reasons) are untouched.
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('id, is_flagged, flag_reason')
+            .eq('id', proof.profile_id)
+            .maybeSingle();
+          if (profile?.is_flagged === true && profile?.flag_reason === 'loan_default') {
+            const { data: blocking } = await supabase
+              .from('loans')
+              .select('id')
+              .eq('profile_id', proof.profile_id)
+              .in('status', ['overdue', 'defaulted', 'in_recovery'])
+              .limit(1);
+            if (!blocking || blocking.length === 0) {
+              await supabase
+                .from('profiles')
+                .update({ is_flagged: false, flag_reason: null })
+                .eq('id', proof.profile_id);
+              logger.info(`Default flag cleared for profile ${proof.profile_id} after repayment verification.`);
+            }
+          }
+        } catch (unflagErr) {
+          logger.warn('Default-flag clear check failed (non-fatal):', unflagErr.message);
+        }
       }
 
       // Get the created receipt

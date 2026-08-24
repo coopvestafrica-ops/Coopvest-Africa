@@ -16,9 +16,25 @@ const validate = require('../middleware/validate');
 const { verifyLoanOwnership } = require('../middleware/ownership');
 const referralService = require('../services/referralService');
 const qrCodeService = require('../services/qrCodeService');
+const loanPolicy = require('../lib/loanPolicy');
 const logger = require('../utils/logger');
 
-const LOAN_TYPES = ['Quick Loan', 'Micro Loan', 'Business Loan', 'Emergency Loan'];
+const ADMIN_ROLES = ['admin', 'superadmin', 'super_admin', 'staff'];
+const AGREEMENT_VERSION = 'v1.0';
+
+const LOAN_TYPES = [
+  // Mobile app loan types
+  'Quick Loan',
+  'Flexi Loan',
+  'Stable Loan (12 months)',
+  'Stable Loan (18 months)',
+  'Premium Loan',
+  'Maxi Loan',
+  // Legacy types
+  'Micro Loan',
+  'Business Loan',
+  'Emergency Loan',
+];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -73,12 +89,84 @@ router.post(
     body('tenureMonths').isInt({ min: 1, max: 60 }),
     body('purpose').optional().isString().isLength({ max: 500 }),
     body('applyReferralBonus').optional().isBoolean(),
+    body('agreementAccepted').isBoolean(),
+    body('agreementVersion').optional().isString().isLength({ max: 20 }),
   ],
   validate,
   async (req, res) => {
     try {
-      const { loanType, amount, tenureMonths, purpose, applyReferralBonus } = req.body;
+      const { loanType, amount, tenureMonths, purpose, applyReferralBonus, agreementAccepted, agreementVersion } = req.body;
       const profileId = req.user.id;
+
+      // ── Digital loan agreement (Policy §2.2) ──────────────────────────────
+      if (agreementAccepted !== true) {
+        return res.status(400).json({
+          success: false,
+          code: 'AGREEMENT_REQUIRED',
+          error: 'You must read and accept the Digital Loan Agreement before applying.',
+        });
+      }
+
+      // ── Active default restriction (Policy §4) ────────────────────────────
+      // Flagged accounts and members with overdue/defaulted/in-recovery loans
+      // cannot take a new loan until obligations are regularized.
+      const { data: profile, error: profileErr } = await supabase
+        .from('profiles')
+        .select('id, is_flagged')
+        .eq('id', profileId)
+        .maybeSingle();
+      if (profileErr) throw profileErr;
+      if (profile?.is_flagged === true) {
+        return res.status(403).json({
+          success: false,
+          code: 'ACCOUNT_FLAGGED',
+          error: 'Your account is currently restricted. Please contact support to resolve outstanding issues before applying for a loan.',
+        });
+      }
+
+      const { data: memberLoans, error: loansErr } = await supabase
+        .from('loans')
+        .select('id, loan_id, amount, status, remaining_balance, total_repayment')
+        .eq('profile_id', profileId)
+        .in('status', loanPolicy.DEFAULT_BLOCKING_STATUSES);
+      if (loansErr) throw loansErr;
+
+      if (memberLoans && memberLoans.length > 0) {
+        const outstanding = memberLoans.map((l) => ({
+          loanId: l.loan_id || l.id,
+          status: l.status,
+          balance: Number(l.remaining_balance ?? l.total_repayment ?? l.amount ?? 0),
+        }));
+        return res.status(403).json({
+          success: false,
+          code: 'ACTIVE_DEFAULT_RESTRICTION',
+          error: 'You have an overdue or defaulted loan. New loan applications are restricted until your outstanding obligations are resolved.',
+          outstandingObligations: outstanding,
+        });
+      }
+
+      // ── Savings-based eligibility cap (Policy §3) ─────────────────────────
+      const { data: savings, error: savingsErr } = await supabase
+        .from('savings')
+        .select('total_saved')
+        .eq('profile_id', profileId)
+        .maybeSingle();
+      if (savingsErr) throw savingsErr;
+
+      const totalSavings = Number(savings?.total_saved || 0);
+      const maxAllowed = loanPolicy.maxLoanAmount(loanType, totalSavings);
+      if (Number(amount) > maxAllowed) {
+        return res.status(400).json({
+          success: false,
+          code: 'EXCEEDS_SAVINGS_LIMIT',
+          error: maxAllowed > 0
+            ? `The maximum you can borrow on a ${loanType} is ₦${maxAllowed.toLocaleString()} (${loanPolicy.multiplierFor(loanType)}× your savings of ₦${totalSavings.toLocaleString()}).`
+            : `You need accumulated savings to apply for a ${loanType}. Eligibility is based on ${loanPolicy.multiplierFor(loanType)}× your savings.`,
+          maxAllowed,
+          multiplier: loanPolicy.multiplierFor(loanType),
+          totalSavings,
+        });
+      }
 
       let bonusPercent = 0;
       if (applyReferralBonus) {
@@ -87,6 +175,19 @@ router.post(
       }
 
       const calc = referralService.calculateInterestWithBonus(loanType, amount, tenureMonths, bonusPercent);
+
+      // Snapshot the member's current contribution commitment — it becomes the
+      // floor below which they cannot reduce while this loan is active (Policy:
+      // contribution reduction during an active loan).
+      let currentContribution = null;
+      try {
+        const { data: plan } = await supabase
+          .from('contribution_plans')
+          .select('current_monthly_amount')
+          .eq('profile_id', profileId)
+          .maybeSingle();
+        currentContribution = plan?.current_monthly_amount ?? null;
+      } catch (_) { /* contribution_plans may not exist yet */ }
 
       const loanId = newLoanId();
       const insertPayload = {
@@ -103,21 +204,44 @@ router.post(
         total_repayment: calc.monthlyRepaymentAfterBonus * tenureMonths,
         savings_from_bonus: calc.totalSavingsFromBonus,
         status: 'pending',
+        agreement_accepted_at: new Date().toISOString(),
+        agreement_version: agreementVersion || AGREEMENT_VERSION,
+        monthly_contribution_at_application: currentContribution,
       };
 
-      const { data: loan, error } = await supabase
+      let { data: loan, error } = await supabase
         .from('loans')
         .insert(insertPayload)
         .select('*')
         .single();
+
+      if (error && /Could not find the .* column|column .* does not exist/i.test(error.message || '')) {
+        // Migration 019 not applied yet — retry without the new columns.
+        delete insertPayload.agreement_accepted_at;
+        delete insertPayload.agreement_version;
+        delete insertPayload.monthly_contribution_at_application;
+        ({ data: loan, error } = await supabase.from('loans').insert(insertPayload).select('*').single());
+      }
       if (error) throw error;
+
+      // Retain evidence of the borrower's digital acceptance (Policy §2.2).
+      const { error: agreementErr } = await supabase.from('loan_agreements').insert({
+        loan_id: loan.id,
+        profile_id: profileId,
+        agreement_version: agreementVersion || AGREEMENT_VERSION,
+        accepted_at: new Date().toISOString(),
+        ip_address: (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || null,
+        user_agent: req.headers['user-agent'] || null,
+        metadata: { loanType, amount, tenureMonths },
+      });
+      if (agreementErr) logger.warn('loan_agreements insert failed:', agreementErr.message);
 
       let bonusResult = null;
       if (applyReferralBonus && bonusPercent > 0) {
         bonusResult = await referralService.applyBonusToLoan(profileId, loanId, loanType);
       }
 
-      await auditLog(profileId, 'LOAN_APPLIED', loan.id, { loanType, amount, bonusPercent });
+      await auditLog(profileId, 'LOAN_APPLIED', loan.id, { loanType, amount, bonusPercent, agreementAccepted: true });
 
       res.status(201).json({
         success: true,
@@ -834,16 +958,28 @@ router.post(
 
 /**
  * POST /api/v1/loans/:loanId/apply-penalty
+ * Admin/staff only — penalties are imposed on borrowers, never by them.
+ * The automated Stage 2 penalty is applied by loanRecoveryWorker.
  */
 router.post(
   '/:loanId/apply-penalty',
   authenticate,
   [param('loanId').notEmpty()],
   validate,
-  verifyLoanOwnership,
   async (req, res) => {
     try {
-      const loan = req.loan;
+      if (!ADMIN_ROLES.includes(req.user.role)) {
+        return res.status(403).json({ success: false, error: 'Only admin staff can apply loan penalties.' });
+      }
+      const uuid = await resolveLoanUuid(req.params.loanId);
+      if (!uuid) return res.status(404).json({ success: false, error: 'Loan not found' });
+      const { data: loan, error: loanErr } = await supabase
+        .from('loans')
+        .select('*')
+        .eq('id', uuid)
+        .maybeSingle();
+      if (loanErr) throw loanErr;
+      if (!loan) return res.status(404).json({ success: false, error: 'Loan not found' });
       const PENALTY = 3000;
 
       if (!['active', 'repaying', 'overdue'].includes(loan.status)) {

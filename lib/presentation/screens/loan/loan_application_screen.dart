@@ -357,6 +357,21 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
     );
   }
 
+  /// Pulls the backend's rejection reason out of a Dio-style error so the
+  /// member sees the actual policy rule they hit (default restriction,
+  /// savings limit, missing agreement, ...).
+  String _extractApiError(Object e) {
+    try {
+      final dynamic err = e;
+      final data = err.response?.data;
+      if (data is Map) {
+        if (data['error'] != null) return data['error'].toString();
+        if (data['message'] != null) return data['message'].toString();
+      }
+    } catch (_) {}
+    return 'Your loan application could not be submitted. Please try again.';
+  }
+
   /// Shows the Digital Loan Agreement dialog (Loan Policy §2.2).
   /// Returns true if user accepts, false if they cancel.
   Future<bool> _showLoanAgreementDialog() async {
@@ -516,8 +531,8 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
       
       // Calculate limits based on savings
       final minAmount = 1000.0;
-      // TEMP: use 10,000,000 test cap when savings is 0 (restore to memberSavings * multiplier)
-      final maxAmount = memberSavings > 0 ? memberSavings * multiplier : 10000000.0;
+      // Loan limit = savings × product multiplier (Premium 4x, Maxi 5x, others 3x)
+      final maxAmount = memberSavings * multiplier;
 
       // Validate amount range based on savings
       if (requestedAmount < minAmount) {
@@ -532,7 +547,9 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
       if (requestedAmount > maxAmount) {
         setState(() {
           _loanStatus = 'Rejected';
-          _rejectionReason = 'Maximum amount for ${_selectedLoanType} is \u20a6${maxAmount.toStringAsFixed(0)} (${multiplier}x your savings)';
+          _rejectionReason = maxAmount > 0
+              ? 'Maximum amount for ${_selectedLoanType} is \u20a6${maxAmount.toStringAsFixed(0)} (${multiplier}x your savings)'
+              : 'You need accumulated savings to apply for a $_selectedLoanType. Your loan limit is ${multiplier}x your total savings.';
           _isSubmitting = false;
         });
         return;
@@ -552,10 +569,9 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
       String? qrId;
       String? qrCodeData;
 
-      // Create the loan via the backend /loans/apply route.
-      // (Previously this called /loans/register, which does not exist, so the
-      // loan was never persisted and guarantors later saw
-      // "invalid loan reference format".)
+      // The backend enforces the loan policy (agreement acceptance, savings
+      // multiplier cap, active-default restriction) — if it rejects the
+      // application we stop here and show the server's reason.
       final apiClient = ref.read(apiClientProvider);
       try {
         final applyResponse = await apiClient.post('/loans/apply', data: {
@@ -563,6 +579,8 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
           'amount': requestedAmount,
           'tenureMonths': loanInfo['duration'],
           'purpose': _purposeController.text.trim(),
+          'agreementAccepted': true,
+          'agreementVersion': 'v1.0',
         });
 
         // /loans/apply returns { success, loan, interest, bonus }.
@@ -578,13 +596,25 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
         if (backendLoanId == null || backendLoanId!.isEmpty) {
           throw Exception('Backend did not return a loan id');
         }
+      } catch (e) {
+        // Application rejected by the backend policy checks — show the reason.
+        final serverMessage = _extractApiError(e);
+        debugPrint('Loan application rejected: $serverMessage');
+        setState(() {
+          _loanStatus = 'Rejected';
+          _rejectionReason = serverMessage;
+          _isSubmitting = false;
+        });
+        return;
+      }
 
-        // Generate QR code via backend
+      // Generate QR code via backend (failure falls back to a local QR).
+      try {
         final qrResponse = await apiClient.post('/loans/$backendLoanId/generate-qr', data: {
           'applicantName': widget.userName,
           'applicantPhone': widget.userPhone,
         });
-        
+
         if (qrResponse != null && qrResponse['qr'] != null) {
           final qr = qrResponse['qr'] as Map<String, dynamic>;
           qrId = qr['id'] as String?;
@@ -598,7 +628,7 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
           _qrImageDataUrl = qr['qrCode'] as String?;
         }
       } catch (e) {
-        // Backend errors - continue with local fallback IDs
+        // QR generation errors - continue with local fallback QR
         debugPrint('Backend QR generation failed, using fallback: $e');
       }
 
@@ -780,8 +810,8 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
     
     // Calculate min and max based on savings multiplier
     final minAmount = 1000.0; // Minimum loan of ₦1,000
-    // TEMP: use 10,000,000 test cap when savings is 0 (restore to memberSavings * multiplier)
-    final maxAmount = memberSavings > 0 ? memberSavings * multiplier : 10000000.0;
+    // Loan limit = savings × product multiplier (Premium 4x, Maxi 5x, others 3x)
+    final maxAmount = memberSavings * multiplier;
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(

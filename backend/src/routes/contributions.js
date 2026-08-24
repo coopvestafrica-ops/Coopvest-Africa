@@ -23,6 +23,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
+const loanPolicy = require('../lib/loanPolicy');
 const logger = require('../utils/logger');
 
 router.use(authenticate);
@@ -97,6 +98,8 @@ router.get('/summary', async (req, res) => {
           lifetimeContributions = Number(savings.total_saved) || 0;
         }
 
+        // This month's credit transactions (deposits/contributions) give a
+        // realistic "this month" figure for the progress card.
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
         const { data: monthCredits } = await supabase
           .from('transactions')
@@ -109,6 +112,7 @@ router.get('/summary', async (req, res) => {
           0,
         );
 
+        // This year's credits for the yearly figure.
         const yearStart = new Date(now.getFullYear(), 0, 1).toISOString();
         const { data: yearCredits } = await supabase
           .from('transactions')
@@ -241,6 +245,29 @@ router.post(
         return res.status(400).json({
           success: false,
           error: 'Reduction amount must be less than your current monthly contribution.',
+        });
+      }
+
+      // Policy: a member with an active loan may not reduce their monthly
+      // contribution below the level used for that loan's eligibility
+      // (increases are always allowed).
+      const { data: activeLoans, error: loansErr } = await supabase
+        .from('loans')
+        .select('id, loan_id, monthly_contribution_at_application')
+        .eq('profile_id', req.user.id)
+        .in('status', loanPolicy.ACTIVE_LOAN_STATUSES);
+      if (loansErr && !/Could not find the .* column|column .* does not exist/i.test(loansErr.message || '')) throw loansErr;
+
+      const floor = (activeLoans || []).reduce(
+        (max, l) => Math.max(max, Number(l.monthly_contribution_at_application) || 0),
+        0,
+      );
+      if (floor > 0 && requested_amount < floor) {
+        return res.status(400).json({
+          success: false,
+          code: 'REDUCTION_BLOCKED_ACTIVE_LOAN',
+          error: `You have an active loan. Your monthly contribution cannot be reduced below ₦${floor.toLocaleString()} — the level used for your loan eligibility — until the loan is fully repaid. You may still increase your contribution at any time.`,
+          minimumAllowed: floor,
         });
       }
 

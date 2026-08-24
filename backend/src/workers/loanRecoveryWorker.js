@@ -167,6 +167,22 @@ async function processDue() {
             body: `A ₦3,000 late repayment charge has been added to your loan balance due to 2 consecutive missed payments. Your new outstanding balance is ₦${newBalance.toLocaleString()}. Please arrange a repayment plan immediately.`,
           });
 
+          // Flag the account (Policy: Active Default Restriction). The flag is
+          // cleared automatically once no overdue/defaulted loans remain.
+          const { error: flagErr } = await supabase
+            .from('profiles')
+            .update({ is_flagged: true, flag_reason: 'loan_default' })
+            .eq('id', profileId)
+            .neq('is_flagged', true);
+          if (flagErr) {
+            // flag_reason requires migration 019 — fall back to the bare flag
+            if (/Could not find the .* column|column .* does not exist/i.test(flagErr.message || '')) {
+              await supabase.from('profiles').update({ is_flagged: true }).eq('id', profileId).neq('is_flagged', true);
+            } else {
+              logger.warn('loanRecoveryWorker: account flag failed:', flagErr.message);
+            }
+          }
+
           // Notify admin
           await notifyAdminOfDefault(loan, 2);
 

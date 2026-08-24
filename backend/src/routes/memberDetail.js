@@ -125,6 +125,7 @@ router.get('/:profileId/profile', async (req, res) => {
     // Process loan data to get statistics
     const loanData = loans.data || [];
     const activeLoans = loanData.filter(l => ['active', 'approved', 'disbursed'].includes(l.status));
+    const problemLoans = loanData.filter(l => ['overdue', 'defaulted', 'in_recovery'].includes(l.status));
     const completedLoans = loanData.filter(l => l.status === 'completed');
     const rejectedLoans = loanData.filter(l => l.status === 'rejected');
     
@@ -242,10 +243,17 @@ router.get('/:profileId/profile', async (req, res) => {
 
       // Loan Information
       loanInfo: {
-        loanEligibilityStatus: determineLoanEligibility(activeLoans.length, savingsData?.consecutive_months || 0),
+        loanEligibilityStatus: determineLoanEligibility(problemLoans.length, activeLoans.length),
         monthsCompleted: savingsData?.consecutive_months || 0,
-        loanCategoryEligible: determineLoanCategory(savingsData?.consecutive_months || 0),
+        loanCategoryEligible: determineLoanCategory(),
         maximumLoanAmount: calculateMaxLoanAmount(savingsData?.total_saved || 0, activeLoans.length),
+        outstandingObligations: problemLoans.map(loan => ({
+          id: loan.id,
+          type: loan.loan_type,
+          amount: loan.amount,
+          outstandingBalance: loan.outstanding_amount || loan.remaining_balance || loan.amount,
+          status: loan.status,
+        })),
         activeLoans: activeLoans.map(loan => ({
           id: loan.id,
           type: loan.loan_type,
@@ -461,23 +469,20 @@ function maskAccountNumber(accountNumber) {
   return '****' + accountNumber.slice(-4);
 }
 
-function determineLoanEligibility(activeLoans, consecutiveMonths) {
+function determineLoanEligibility(problemLoans, activeLoans) {
+  if (problemLoans > 0) return 'Restricted (overdue/defaulted loan)';
   if (activeLoans > 0) return 'Has Active Loan';
-  if (consecutiveMonths < 3) return 'Not Eligible (Min 3 months required)';
   return 'Eligible';
 }
 
-function determineLoanCategory(consecutiveMonths) {
-  if (consecutiveMonths >= 12) return 'Gold (Up to 3x savings)';
-  if (consecutiveMonths >= 6) return 'Silver (Up to 2x savings)';
-  return 'Bronze (Up to 1x savings)';
+function determineLoanCategory() {
+  return 'Quick/Flexi/Stable (3x savings), Premium (4x), Maxi (5x)';
 }
 
 function calculateMaxLoanAmount(totalSavings, activeLoans) {
   if (activeLoans > 0) return 0;
-  if (totalSavings >= 100000) return totalSavings * 3;
-  if (totalSavings >= 50000) return totalSavings * 2;
-  return totalSavings;
+  // Theoretical ceiling: the highest product multiplier (Maxi Loan, 5x).
+  return totalSavings * 5;
 }
 
 module.exports = router;
