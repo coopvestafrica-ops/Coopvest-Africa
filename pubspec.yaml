@@ -4,14 +4,14 @@
 flutter_native_splash:
   color: "#1B5E20"
   color_dark: "#0D3D12"
-  image: assets/images/logo.png
-  image_dark: assets/images/logo.png
+  image: assets/images/splash-logo.png
+  image_dark: assets/images/splash-logo.png
   fullscreen: false
   android_12:
     color: "#1B5E20"
     color_dark: "#0D3D12"
-    image: assets/images/logo.png
-    image_dark: assets/images/logo.png
+    image: assets/images/splash-logo.png
+    image_dark: assets/images/splash-logo.png
     fullscreen: false
   ios: true
   web: false
@@ -127,6 +127,7 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/animations/
+    - assets/audio/
 
   fonts:
     - family: Inter

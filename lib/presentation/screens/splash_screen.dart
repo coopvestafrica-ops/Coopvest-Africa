@@ -27,6 +27,7 @@ class _SplashScreenState extends State<SplashScreen>
   
   late final Animation<double> _fadeAnimation;
   late final Animation<double> _scaleAnimation;
+  late final Animation<double> _logoSlideAnimation;
   late final Animation<double> _rotateAnimation;
   late final Animation<double> _particleAnimation;
   
@@ -35,7 +36,7 @@ class _SplashScreenState extends State<SplashScreen>
   bool _soundPlayed = false;
   int _elapsedSeconds = 0;
   
-  static const int splashDurationSeconds = 6;
+  static const int splashDurationSeconds = 30;
 
   @override
   void initState() {
@@ -75,10 +76,17 @@ class _SplashScreenState extends State<SplashScreen>
       ),
     );
 
-    _scaleAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
+    _scaleAnimation = Tween<double>(begin: 0.78, end: 1.0).animate(
       CurvedAnimation(
         parent: _fadeController,
-        curve: const Interval(0.0, 0.6, curve: Curves.elasticOut),
+        curve: const Interval(0.0, 0.65, curve: Curves.easeOutCubic),
+      ),
+    );
+
+    _logoSlideAnimation = Tween<double>(begin: 18.0, end: 0.0).animate(
+      CurvedAnimation(
+        parent: _fadeController,
+        curve: const Interval(0.0, 0.65, curve: Curves.easeOutCubic),
       ),
     );
 
@@ -109,30 +117,14 @@ class _SplashScreenState extends State<SplashScreen>
   Future<void> _playStartupSound() async {
     if (_soundPlayed) return;
     _soundPlayed = true;
-    
+
     try {
-      // Play startup jingle sound
-      await _audioPlayer.play(UrlSource(
-        'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3',
-      ));
-      
-      // Play a second chime after 1 second
-      Future.delayed(const Duration(seconds: 1), () async {
-        if (_showSplash && mounted) {
-          await _audioPlayer.play(UrlSource(
-            'https://assets.mixkit.co/active_storage/sfx/123/123-preview.mp3',
-          ));
-        }
-      });
-      
-      // Play final chord after 2 seconds
-      Future.delayed(const Duration(seconds: 2), () async {
-        if (_showSplash && mounted) {
-          await _audioPlayer.play(UrlSource(
-            'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3',
-          ));
-        }
-      });
+      // Play one short local branded cue. Keeping this local avoids network
+      // delays and prevents multiple remote sounds from overlapping.
+      await _audioPlayer.play(
+        AssetSource('audio/coopvest_startup.mp3'),
+        volume: 0.65,
+      );
     } catch (e) {
       debugPrint('Error playing startup sound: $e');
     }
@@ -147,7 +139,7 @@ class _SplashScreenState extends State<SplashScreen>
         _elapsedSeconds++;
       });
       
-      // Auto-dismiss after 30 seconds
+      // Auto-dismiss after the configured maximum duration
       if (_elapsedSeconds >= splashDurationSeconds) {
         _dismissSplash();
         return false;
@@ -181,7 +173,8 @@ class _SplashScreenState extends State<SplashScreen>
       await _fadeController.reverse();
       if (mounted) {
         setState(() => _showSplash = false);
-        _audioPlayer.dispose();
+        await _audioPlayer.stop();
+        await _audioPlayer.dispose();
       }
     }
   }
@@ -208,7 +201,7 @@ class _SplashScreenState extends State<SplashScreen>
         _rotateController,
       ]),
       builder: (context, child) {
-        final pulseScale = 1.0 + (_pulseController.value * 0.08);
+        final pulseScale = 1.0 + (_pulseController.value * 0.025);
         
         return Container(
           decoration: BoxDecoration(
@@ -268,49 +261,30 @@ class _SplashScreenState extends State<SplashScreen>
                         scale: _scaleAnimation.value * pulseScale,
                         child: Transform.rotate(
                           angle: _rotateAnimation.value,
-                          child: Container(
-                            width: 140,
-                            height: 140,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(32),
-                              boxShadow: [
-                                // Outer glow - pulsing
-                                BoxShadow(
-                                  color: Colors.white.withOpacity(0.3 * pulseScale),
-                                  blurRadius: 40 * pulseScale,
-                                  spreadRadius: 5 * pulseScale,
-                                ),
-                                // Inner shadow
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.3),
-                                  blurRadius: 20,
-                                  offset: const Offset(0, 8),
-                                ),
-                              ],
+                          child: Transform.translate(
+                            offset: Offset(0, _logoSlideAnimation.value),
+                            child: SizedBox(
+                            width: 320,
+                            height: 320,
+                            child: Image.asset(
+                              'assets/images/splash-logo.png',
+                              fit: BoxFit.contain,
+                              // The splash asset is transparent, so the logo sits
+                              // directly on the branded green surface.
+                              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                                if (wasSynchronouslyLoaded || frame != null) {
+                                  return AnimatedOpacity(
+                                    opacity: frame != null ? 1.0 : 0.0,
+                                    duration: const Duration(milliseconds: 350),
+                                    child: child,
+                                  );
+                                }
+                                return const _LogoFallback();
+                              },
+                              errorBuilder: (context, error, stackTrace) {
+                                return const _LogoFallback();
+                              },
                             ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(32),
-                              child: Image.asset(
-                                'assets/images/logo.png',
-                                fit: BoxFit.cover,
-                                // Smooth fade-in once the asset decodes, so the
-                                // logo never pops in abruptly (and never leaves a
-                                // blank white tile while loading).
-                                frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                                  if (wasSynchronouslyLoaded || frame != null) {
-                                    return AnimatedOpacity(
-                                      opacity: frame != null ? 1.0 : 0.0,
-                                      duration: const Duration(milliseconds: 350),
-                                      child: child,
-                                    );
-                                  }
-                                  return _LogoFallback();
-                                },
-                                errorBuilder: (context, error, stackTrace) {
-                                  return const _LogoFallback();
-                                },
-                              ),
                             ),
                           ),
                         ),
@@ -318,50 +292,9 @@ class _SplashScreenState extends State<SplashScreen>
                       
                       const SizedBox(height: 40),
                       
-                      // App Name with shimmer animation
-                      ShaderMask(
-                        shaderCallback: (bounds) {
-                          return LinearGradient(
-                            colors: [
-                              Colors.white,
-                              Colors.white.withOpacity(0.6),
-                              Colors.white,
-                              Colors.white.withOpacity(0.6),
-                              Colors.white,
-                            ],
-                            stops: [
-                              0.0,
-                              (_particleAnimation.value * 0.4 + 0.3) % 1.0,
-                              (_particleAnimation.value * 0.4 + 0.5) % 1.0,
-                              (_particleAnimation.value * 0.4 + 0.7) % 1.0,
-                              1.0,
-                            ],
-                          ).createShader(bounds);
-                        },
-                        child: const Text(
-                          'Coopvest Africa',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.5,
-                          ),
-                        ),
-                      ),
-                      
-                      const SizedBox(height: 12),
-                      
-                      // Tagline
-                      Text(
-                        'Savings • Loans • Growth',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.85),
-                          fontSize: 16,
-                          letterSpacing: 3,
-                        ),
-                      ),
-                      
-                      const SizedBox(height: 60),
+                      // The splash-logo asset already contains the wordmark
+                      // and the exact brand tagline, so no duplicate text is added.
+                      const SizedBox(height: 24),
                       
                       // Animated loading indicator
                       SizedBox(
