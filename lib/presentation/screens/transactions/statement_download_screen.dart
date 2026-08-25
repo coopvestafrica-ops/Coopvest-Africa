@@ -250,16 +250,20 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.all(40),
-        background: (context) => pw.FullPage(
-          ignoreMargins: true,
-          child: pw.Center(
-            child: pw.Opacity(
-              opacity: 0.045,
-              child: pw.Image(
-                watermarkImage,
-                width: 300,
-                height: 300,
-                fit: pw.BoxFit.contain,
+        pageTheme: pw.PageTheme(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(40),
+          buildBackground: (context) => pw.FullPage(
+            ignoreMargins: true,
+            child: pw.Center(
+              child: pw.Opacity(
+                opacity: 0.045,
+                child: pw.Image(
+                  watermarkImage,
+                  width: 300,
+                  height: 300,
+                  fit: pw.BoxFit.contain,
+                ),
               ),
             ),
           ),
