@@ -204,15 +204,18 @@ class _SplashScreenState extends State<SplashScreen>
         final pulseScale = 1.0 + (_pulseController.value * 0.025);
         
         return Container(
-          decoration: BoxDecoration(
+          decoration: const BoxDecoration(
+            // These colors are sampled from the approved splash artwork so the
+            // image and the Flutter surface read as one continuous composition.
             gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
               colors: [
-                CoopvestColors.primary,
-                CoopvestColors.primaryDark,
-                CoopvestColors.primary.withOpacity(0.9),
+                Color(0xFF062D0A),
+                Color(0xFF0A4A13),
+                Color(0xFF062C0A),
               ],
+              stops: [0.0, 0.52, 1.0],
             ),
           ),
           child: Stack(
@@ -267,10 +270,10 @@ class _SplashScreenState extends State<SplashScreen>
                             width: 320,
                             height: 320,
                             child: Image.asset(
-                              'assets/images/splash-logo.png',
+                              'assets/images/splash-logo-transparent.png',
                               fit: BoxFit.contain,
-                              // The splash asset is transparent, so the logo sits
-                              // directly on the branded green surface.
+                              // The cleaned transparent asset sits directly on the matched
+                              // dark-emerald surface without a visible image rectangle.
                               frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
                                 if (wasSynchronouslyLoaded || frame != null) {
                                   return AnimatedOpacity(
