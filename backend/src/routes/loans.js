@@ -146,6 +146,10 @@ router.post(
       }
 
       // ── Savings-based eligibility cap (Policy §3) ─────────────────────────
+      // savings.total_saved is never written anywhere in the codebase, so it
+      // is always 0 and would cap every loan at ₦0. Use the wallet balance —
+      // the member's actual funds — as the basis for the eligibility cap,
+      // falling back to total_saved only if it was ever populated.
       const { data: savings, error: savingsErr } = await supabase
         .from('savings')
         .select('total_saved')
@@ -153,7 +157,15 @@ router.post(
         .maybeSingle();
       if (savingsErr) throw savingsErr;
 
-      const totalSavings = Number(savings?.total_saved || 0);
+      const { data: walletRow } = await supabase
+        .from('wallets')
+        .select('balance')
+        .eq('profile_id', profileId)
+        .maybeSingle();
+
+      const savedAmount = Number(savings?.total_saved || 0);
+      const walletBalance = Number(walletRow?.balance || 0);
+      const totalSavings = savedAmount > 0 ? savedAmount : walletBalance;
       const maxAllowed = loanPolicy.maxLoanAmount(loanType, totalSavings);
       if (Number(amount) > maxAllowed) {
         return res.status(400).json({

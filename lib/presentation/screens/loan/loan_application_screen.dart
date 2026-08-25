@@ -525,9 +525,13 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
       final requestedAmount = double.tryParse(_amountController.text.replaceAll(',', '')) ?? 0.0;
       final monthlySavings = double.tryParse(_monthlySavingsController.text.replaceAll(',', '')) ?? 0.0;
       
-      // Get member's savings for limit calculation
+      // Get member's savings for limit calculation. total_saved is never
+      // written by the backend (stays 0), so fall back to the wallet balance.
       final walletState = ref.read(walletProvider);
-      final memberSavings = walletState.wallet?.totalSavings ?? walletState.wallet?.balance ?? 0.0;
+      final wallet = walletState.wallet;
+      final memberSavings = (wallet != null && wallet.totalSavings > 0)
+          ? wallet.totalSavings
+          : (wallet?.balance ?? 0.0);
       
       // Calculate limits based on savings
       final minAmount = 1000.0;
@@ -804,9 +808,14 @@ class _LoanApplicationScreenState extends ConsumerState<LoanApplicationScreen> {
     final loanInfo = _loanTypes[_selectedLoanType]!;
     final multiplier = (loanInfo['multiplier'] as num).toDouble();
     
-    // Get member's savings from wallet provider
+    // Get member's savings from wallet provider. total_saved is never written
+    // by the backend (stays 0), so fall back to the wallet balance, which is
+    // what actually holds the member's money.
     final walletState = ref.watch(walletProvider);
-    final memberSavings = walletState.wallet?.totalSavings ?? walletState.wallet?.balance ?? 0.0;
+    final wallet = walletState.wallet;
+    final memberSavings = (wallet != null && wallet.totalSavings > 0)
+        ? wallet.totalSavings
+        : (wallet?.balance ?? 0.0);
     
     // Calculate min and max based on savings multiplier
     final minAmount = 1000.0; // Minimum loan of ₦1,000

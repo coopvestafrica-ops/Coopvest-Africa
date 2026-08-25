@@ -326,12 +326,6 @@ class _WalletDashboardScreenState extends ConsumerState<WalletDashboardScreen> {
         // ),
         _buildActionItem(
           context,
-          'Submit Proof',
-          Icons.receipt_outlined,
-          () => Navigator.push(context, MaterialPageRoute(builder: (context) => PaymentProofUploadScreen())),
-        ),
-        _buildActionItem(
-          context,
           'My Proofs',
           Icons.fact_check_outlined,
           () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PaymentProofsStatusScreen())),
