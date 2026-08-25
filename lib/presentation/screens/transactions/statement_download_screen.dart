@@ -114,6 +114,40 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
     }
   }
 
+  List<Transaction> _prepareStatementTransactions(
+    List<Transaction> transactions,
+    String statementType,
+    DateTime startDate,
+    DateTime endDate,
+  ) {
+    final rangeStart = DateTime(startDate.year, startDate.month, startDate.day);
+    final rangeEnd = DateTime(endDate.year, endDate.month, endDate.day).add(const Duration(days: 1));
+    final normalizedType = statementType.toLowerCase();
+
+    final filtered = transactions.where((transaction) {
+      final createdAt = transaction.createdAt.toLocal();
+      final inDateRange = !createdAt.isBefore(rangeStart) && createdAt.isBefore(rangeEnd);
+      final isCompleted = transaction.status.toLowerCase() == 'completed';
+      if (!inDateRange || !isCompleted) return false;
+
+      final type = transaction.type.toLowerCase();
+      final description = (transaction.description ?? '').toLowerCase();
+      switch (normalizedType) {
+        case 'contributions':
+          return type.contains('contribution') || description.contains('contribution');
+        case 'loans':
+          return type.contains('loan') || description.contains('loan');
+        case 'transactions':
+        case 'all':
+        default:
+          return true;
+      }
+    }).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    return filtered;
+  }
+
   Future<void> _generateAndDownloadStatement() async {
     if (_startDate == null || _endDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -139,12 +173,14 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
       // Get transactions - this should now have real data
       final transactions = walletState.transactions;
 
-      // Filter transactions by date range
-      final filteredTransactions = transactions.where((txn) {
-        final txnDate = txn.createdAt;
-        return txnDate.isAfter(_startDate!.subtract(const Duration(days: 1))) &&
-            txnDate.isBefore(_endDate!.add(const Duration(days: 1)));
-      }).toList();
+      // Include only completed transactions in the selected period and type,
+      // sorted newest first for a predictable statement order.
+      final filteredTransactions = _prepareStatementTransactions(
+        transactions,
+        _selectedType,
+        _startDate!,
+        _endDate!,
+      );
 
       // Generate PDF
       final pdf = await _createPdf(
@@ -204,31 +240,43 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
   }) async {
     final pdf = pw.Document();
 
-    // Load logo image
-    final ByteData logoData = await rootBundle.load('assets/images/logo.png');
+    // Load the new CoopVest C/V brand icon for the statement header.
+    final ByteData logoData = await rootBundle.load('assets/images/statement-logo.png');
     final Uint8List logoBytes = logoData.buffer.asUint8List();
     final pw.MemoryImage logoImage = pw.MemoryImage(logoBytes);
-
+    final ByteData watermarkData = await rootBundle.load('assets/images/watermark-logo.png');
+    final pw.MemoryImage watermarkImage = pw.MemoryImage(watermarkData.buffer.asUint8List());
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.all(40),
+        background: (context) => pw.FullPage(
+          ignoreMargins: true,
+          child: pw.Center(
+            child: pw.Opacity(
+              opacity: 0.045,
+              child: pw.Image(
+                watermarkImage,
+                width: 300,
+                height: 300,
+                fit: pw.BoxFit.contain,
+              ),
+            ),
+          ),
+        ),
         footer: (context) => _buildPdfPageFooter(context),
         build: (context) => [
           // Header with Logo
           _buildPdfHeader(logoImage, user, startDate, endDate),
           pw.SizedBox(height: 20),
           // Account Summary
-          _buildPdfAccountSummary(wallet),
+          _buildPdfAccountSummary(wallet, transactions),
           pw.SizedBox(height: 20),
           // Statement Type Header
           _buildPdfStatementType(statementType),
           pw.SizedBox(height: 10),
-          // Transactions Table Header
-          _buildPdfTableHeader(),
-          pw.Divider(height: 1, color: PdfColors.grey400),
-          // Transactions
-          ..._buildPdfTransactions(transactions),
+          // Transactions table repeats its header automatically across pages.
+          _buildPdfTransactions(transactions),
           // Summary Footer
           _buildPdfSummary(transactions, wallet),
         ],
@@ -277,13 +325,8 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
           child: pw.Row(
             children: [
               pw.Container(
-                width: 60,
-                height: 60,
-                decoration: pw.BoxDecoration(
-                  color: PdfColors.white,
-                  borderRadius: pw.BorderRadius.circular(8),
-                ),
-                padding: const pw.EdgeInsets.all(8),
+                width: 124,
+                height: 78,
                 child: pw.Image(logoImage, fit: pw.BoxFit.contain),
               ),
               pw.SizedBox(width: 16),
@@ -311,7 +354,8 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
                 ),
               ),
               pw.Container(
-                padding: const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                width: 108,
+                padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: pw.BoxDecoration(
                   color: const PdfColor.fromInt(0x33FFFFFF),
                   borderRadius: pw.BorderRadius.circular(20),
@@ -321,12 +365,14 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
                   children: [
                     pw.Text(
                       'Statement Date',
+                      maxLines: 1,
                       style: const pw.TextStyle(fontSize: 8, color: PdfColors.white),
                     ),
                     pw.Text(
                       DateFormat('MMM dd, yyyy').format(DateTime.now()),
+                      maxLines: 1,
                       style: pw.TextStyle(
-                        fontSize: 12,
+                        fontSize: 10,
                         fontWeight: pw.FontWeight.bold,
                         color: PdfColors.white,
                       ),
@@ -416,7 +462,16 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
     );
   }
 
-  pw.Widget _buildPdfAccountSummary(Wallet? wallet) {
+  pw.Widget _buildPdfAccountSummary(Wallet? wallet, List<Transaction> transactions) {
+    final totalCredits = transactions
+        .where((transaction) => transaction.isCredit)
+        .fold<double>(0, (sum, transaction) => sum + transaction.amount.abs());
+    final totalDebits = transactions
+        .where((transaction) => !transaction.isCredit)
+        .fold<double>(0, (sum, transaction) => sum + transaction.amount.abs());
+    final closingBalance = wallet?.balance ?? 0;
+    final openingBalance = closingBalance - totalCredits + totalDebits;
+
     return pw.Container(
       padding: const pw.EdgeInsets.all(16),
       decoration: pw.BoxDecoration(
@@ -426,9 +481,9 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
       child: pw.Row(
         mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
         children: [
-          _buildPdfStatItem('Current Balance', '₦${(wallet?.balance ?? 0).formatNumber()}', true),
-          _buildPdfStatItem('Total Savings', '₦${(wallet?.totalContributions ?? 0).formatNumber()}', false),
-          _buildPdfStatItem('Available Withdrawal', '₦${(wallet?.availableForWithdrawal ?? 0).formatNumber()}', false),
+          _buildPdfStatItem('Opening Balance', 'NGN ${openingBalance.formatNumber()}', false),
+          _buildPdfStatItem('Closing Balance', 'NGN ${closingBalance.formatNumber()}', true),
+          _buildPdfStatItem('Available Withdrawal', 'NGN ${(wallet?.availableForWithdrawal ?? 0).formatNumber()}', false),
         ],
       ),
     );
@@ -451,7 +506,7 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
   }
 
   pw.Widget _buildPdfStatementType(String type) {
-    String typeLabel = 'All Transactions';
+    String typeLabel = 'Complete Account Statement';
     switch (type) {
       case 'contributions':
         typeLabel = 'Contributions Statement';
@@ -473,66 +528,69 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
     );
   }
 
-  pw.Widget _buildPdfTableHeader() {
-    return pw.Container(
-      padding: const pw.EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-      child: pw.Row(
-        children: [
-          pw.Expanded(flex: 2, child: pw.Text('Date', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
-          pw.Expanded(flex: 4, child: pw.Text('Description', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
-          pw.Expanded(flex: 2, child: pw.Text('Type', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
-          pw.Expanded(flex: 2, child: pw.Text('Amount', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold), textAlign: pw.TextAlign.right)),
-        ],
-      ),
-    );
-  }
-
-  List<pw.Widget> _buildPdfTransactions(List<Transaction> transactions) {
+  pw.Widget _buildPdfTransactions(List<Transaction> transactions) {
     if (transactions.isEmpty) {
-      return [
-        pw.Container(
-          padding: const pw.EdgeInsets.all(20),
-          child: pw.Center(
-            child: pw.Text(
-              'No transactions found for this period',
-              style: const pw.TextStyle(
-                fontSize: 12,
-                color: PdfColors.grey600,
-              ),
-            ),
+      return pw.Container(
+        padding: const pw.EdgeInsets.all(20),
+        child: pw.Center(
+          child: pw.Text(
+            'No completed transactions found for this period',
+            style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey600),
           ),
         ),
-      ];
+      );
     }
-    
-    return transactions.map((txn) {
-      final isCredit = txn.isCredit;
-      return [
-        pw.Container(
-          padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-          child: pw.Row(
+
+    final headerStyle = pw.TextStyle(
+      fontSize: 9,
+      fontWeight: pw.FontWeight.bold,
+      color: PdfColors.grey800,
+    );
+
+    return pw.Table(
+      border: pw.TableBorder(
+        horizontalInside: pw.BorderSide(color: PdfColors.grey200, width: 0.5),
+        bottom: pw.BorderSide(color: PdfColors.grey400, width: 0.8),
+      ),
+      columnWidths: const {
+        0: pw.FlexColumnWidth(2),
+        1: pw.FlexColumnWidth(4),
+        2: pw.FlexColumnWidth(2),
+        3: pw.FlexColumnWidth(2),
+      },
+      children: [
+        pw.TableRow(
+          repeat: true,
+          decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+          children: [
+            pw.Padding(padding: const pw.EdgeInsets.symmetric(vertical: 7, horizontal: 4), child: pw.Text('Date', style: headerStyle)),
+            pw.Padding(padding: const pw.EdgeInsets.symmetric(vertical: 7, horizontal: 4), child: pw.Text('Description', style: headerStyle)),
+            pw.Padding(padding: const pw.EdgeInsets.symmetric(vertical: 7, horizontal: 4), child: pw.Text('Type', style: headerStyle)),
+            pw.Padding(padding: const pw.EdgeInsets.symmetric(vertical: 7, horizontal: 4), child: pw.Text('Amount (NGN)', style: headerStyle, textAlign: pw.TextAlign.right)),
+          ],
+        ),
+        ...transactions.map((txn) {
+          final isCredit = txn.isCredit;
+          final absoluteAmount = txn.amount.abs();
+          final amount = '${isCredit ? '+' : '-'}NGN ${absoluteAmount.formatNumber()}';
+          return pw.TableRow(
             children: [
-              pw.Expanded(flex: 2, child: pw.Text(DateFormat('MMM dd, yyyy').format(txn.createdAt), style: const pw.TextStyle(fontSize: 10))),
-              pw.Expanded(flex: 4, child: pw.Text(txn.description ?? _capitalizeString(txn.type.replaceAll('_', ' ')), style: const pw.TextStyle(fontSize: 10))),
-              pw.Expanded(flex: 2, child: pw.Text(_capitalizeString(txn.type.replaceAll('_', ' ')), style: const pw.TextStyle(fontSize: 10))),
-              pw.Expanded(
-                flex: 2,
+              pw.Padding(padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4), child: pw.Text(DateFormat('MMM dd, yyyy').format(txn.createdAt.toLocal()), style: const pw.TextStyle(fontSize: 9))),
+              pw.Padding(padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4), child: pw.Text(txn.description ?? _capitalizeString(txn.type.replaceAll('_', ' ')), style: const pw.TextStyle(fontSize: 9), maxLines: 2)),
+              pw.Padding(padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4), child: pw.Text(_capitalizeString(txn.type.replaceAll('_', ' ')), style: const pw.TextStyle(fontSize: 9), maxLines: 2)),
+              pw.Padding(
+                padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
                 child: pw.Text(
-                  '${isCredit ? '+' : '-'}₦${txn.amount.formatNumber()}',
-                  style: pw.TextStyle(
-                    fontSize: 10,
-                    fontWeight: pw.FontWeight.bold,
-                    color: isCredit ? PdfColors.green700 : PdfColors.red700,
-                  ),
+                  amount,
+                  style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: isCredit ? PdfColors.green700 : PdfColors.red700),
                   textAlign: pw.TextAlign.right,
                 ),
               ),
             ],
-          ),
-        ),
-        pw.Divider(height: 1, color: PdfColors.grey200),
-      ];
-    }).expand((widget) => widget).toList();
+          );
+        }),
+      ],
+    );
   }
 
   pw.Widget _buildPdfSummary(List<Transaction> transactions, Wallet? wallet) {
@@ -542,9 +600,9 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
     
     for (final t in transactions) {
       if (t.isCredit) {
-        totalCredits += t.amount;
+        totalCredits += t.amount.abs();
       } else {
-        totalDebits += t.amount;
+        totalDebits += t.amount.abs();
       }
     }
     
@@ -574,7 +632,7 @@ class _StatementDownloadScreenState extends ConsumerState<StatementDownloadScree
       children: [
         pw.Text(label, style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
         pw.Text(
-          '₦${amount.formatNumber()}',
+          'NGN ${amount.formatNumber()}',
           style: pw.TextStyle(
             fontSize: 14,
             fontWeight: pw.FontWeight.bold,
