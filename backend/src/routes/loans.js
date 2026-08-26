@@ -213,7 +213,7 @@ router.post(
         referral_bonus_percent: calc.referralBonusPercent,
         effective_interest_rate: calc.effectiveInterestRate,
         monthly_repayment: calc.monthlyRepaymentAfterBonus,
-        total_repayment: calc.monthlyRepaymentAfterBonus * tenureMonths,
+        total_repayment: calc.totalRepayment,
         savings_from_bonus: calc.totalSavingsFromBonus,
         status: 'pending',
         agreement_accepted_at: new Date().toISOString(),
@@ -297,6 +297,25 @@ router.post(
       if (existingQrError) throw existingQrError;
 
       if (existingQr) {
+        // Self-heal QRs minted before the compact-payload fix: their images
+        // encode the full signed loan record and are too dense to scan.
+        // Re-render from just the lookup keys and persist the fixed image.
+        // Already-compact QRs re-render byte-identically, so no DB write.
+        let qrImage = existingQr.qr_code;
+        try {
+          const rendered = await qrCodeService.renderLoanQrImage(existingQr.qr_id, loan.id);
+          if (rendered && rendered !== existingQr.qr_code) {
+            const { error: healErr } = await supabase
+              .from('loan_qrs')
+              .update({ qr_code: rendered })
+              .eq('qr_id', existingQr.qr_id);
+            if (healErr) throw healErr;
+            qrImage = rendered;
+          }
+        } catch (healErr) {
+          logger.warn('QR self-heal render failed, serving stored image:', healErr.message || healErr);
+        }
+
         const found = existingQr.guarantors_found || 0;
         const required = existingQr.guarantors_required || 3;
         return res.json({
@@ -306,7 +325,7 @@ router.post(
             id: existingQr.qr_id,
             loanId,
             expiresAt: existingQr.expires_at,
-            qrCode: existingQr.qr_code,
+            qrCode: qrImage,
             data: existingQr.qr_data,
           },
           progress: {
@@ -376,12 +395,6 @@ router.post(
 
 /**
  * GET /api/v1/loans
- *
- * Each loan is enriched with live guarantor progress and the member's saved QR
- * code so the app can resume a "gathering guarantors" session after being
- * closed: the progress drives "X of 3 approved", and qr_code/qr_data let the
- * borrower re-share the same QR with the remaining guarantors without
- * regenerating it. Batch-fetched to avoid N+1 queries.
  */
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -394,6 +407,9 @@ router.get('/', authenticate, async (req, res) => {
 
     const loans = data || [];
 
+    // Attach live guarantor progress to each loan so the borrower's app can
+    // show "X of 3 guarantors approved" and keep the session visible until all
+    // 3 consent (or the borrower cancels). Batch-fetched to avoid N+1 queries.
     if (loans.length) {
       const loanIds = loans.map((l) => l.id);
 
@@ -409,15 +425,18 @@ router.get('/', authenticate, async (req, res) => {
         }
       });
 
-      // Fetch the latest QR row per loan (required count + the persisted QR
-      // image/data so the app can re-display it after a restart).
+      // Required count + the persisted QR image/data live on loan_qrs. Fetch the
+      // latest QR row per loan so the app can re-share the same QR with the
+      // remaining guarantors after being closed.
       const { data: qrRows } = await supabase
         .from('loan_qrs')
         .select('loan_id, qr_id, qr_code, qr_data, guarantors_required, expires_at, status')
         .in('loan_id', loanIds)
         .order('created_at', { ascending: false });
+      const requiredByLoan = {};
       const latestQrByLoan = {};
       (qrRows || []).forEach((q) => {
+        requiredByLoan[q.loan_id] = q.guarantors_required || 3;
         // Keep only the most recent QR row per loan.
         if (!latestQrByLoan[q.loan_id]) latestQrByLoan[q.loan_id] = q;
       });
@@ -425,7 +444,7 @@ router.get('/', authenticate, async (req, res) => {
       loans.forEach((l) => {
         const qr = latestQrByLoan[l.id];
         l.guarantors_accepted = consentedByLoan[l.id] || 0;
-        l.guarantors_required = (qr && qr.guarantors_required) || 3;
+        l.guarantors_required = requiredByLoan[l.id] || 3;
         l.qr_id = qr ? qr.qr_id : null;
         l.qr_code = qr ? qr.qr_code : null;
         l.qr_data = qr ? qr.qr_data : null;
@@ -765,7 +784,24 @@ router.get(
   validate,
   verifyLoanOwnership,
   async (req, res) => {
-    res.json({ success: true, loan: req.loan });
+    const loan = req.loan;
+    // Attach live guarantor progress (consented count + required) so the
+    // borrower's app can render "X of 3 guarantors approved".
+    try {
+      const { count: accepted } = await supabase
+        .from('loan_guarantors')
+        .select('id', { count: 'exact', head: true })
+        .eq('loan_id', loan.id)
+        .eq('status', 'consented');
+      const { data: qrRow } = await supabase
+        .from('loan_qrs')
+        .select('guarantors_required')
+        .eq('loan_id', loan.id)
+        .maybeSingle();
+      loan.guarantors_accepted = accepted || 0;
+      loan.guarantors_required = (qrRow && qrRow.guarantors_required) || 3;
+    } catch (_) { /* leave defaults if lookup fails */ }
+    res.json({ success: true, loan });
   }
 );
 
@@ -1070,6 +1106,172 @@ router.get(
         'Continued non-payment beyond three months may trigger guarantor recovery procedures ' +
         "in accordance with Coopvest Africa\u2019s loan policy.",
     });
+  }
+);
+
+/**
+ * POST /api/v1/loans/:loanId/repay
+ *
+ * Records a loan repayment.
+ *
+ * - paymentMethod: 'wallet'          → instantly deduct the member's wallet
+ *   and mark the repayment paid (no admin verification needed).
+ *   For any other method (e.g. 'bank_transfer') + optional proof_url → create
+ *   a pending loan_repayment + deposit_request with allocation_type =
+ *   'loan_repayment'. Admin verification of that deposit then marks the
+ *   repayment paid and reduces loans.remaining_balance.
+ *
+ * Members can also repay via the generic POST /wallet/contribute endpoint by
+ * sending allocation_type='loan_repayment' (handled in wallet.js); this
+ * endpoint is the loan-explicit helper the app's LoanApiService calls.
+ */
+router.post(
+  '/:loanId/repay',
+  authenticate,
+  [
+    param('loanId').notEmpty(),
+    body('amount').isFloat({ min: 0.01 }),
+    body('paymentMethod').optional().isString(),
+  ],
+  validate,
+  verifyLoanOwnership,
+  async (req, res) => {
+    try {
+      const loan = req.loan;
+      const amount = Number(req.body.amount);
+      const paymentMethod = (req.body.paymentMethod || 'bank_transfer').toString();
+      const proofUrl = req.body.proof_url || null;
+
+      if (!['active', 'repaying', 'overdue'].includes(loan.status)) {
+        return res.status(400).json({
+          success: false,
+          error: `Repayment is only accepted for active, repaying or overdue loans. Current status: ${loan.status}`,
+        });
+      }
+
+      const now = new Date().toISOString();
+
+      // ── Instant wallet repayment ──
+      if (paymentMethod === 'wallet') {
+        const { ensureWallet } = require('./wallet');
+        const wallet = await ensureWallet(loan.profile_id);
+        const balance = Number(wallet.balance || 0);
+        if (balance < amount) {
+          return res.status(400).json({ success: false, error: 'Insufficient wallet balance for this repayment.' });
+        }
+        const newBalance = balance - amount;
+        const { error: wErr } = await supabase
+          .from('wallets')
+          .update({ balance: newBalance, last_updated: now })
+          .eq('id', wallet.id);
+        if (wErr) throw wErr;
+
+        const { data: txn } = await supabase
+          .from('transactions')
+          .insert({
+            profile_id: loan.profile_id,
+            type: 'loan_repayment',
+            category: 'debit',
+            amount,
+            status: 'completed',
+            description: `Loan repayment for ${loan.loan_id || loan.id}`,
+            payment_method: 'wallet',
+            balance_before: balance,
+            balance_after: newBalance,
+            completed_at: now,
+          })
+          .select('*')
+          .maybeSingle();
+
+        const remainingBefore = Number(loan.remaining_balance ?? loan.total_repayment ?? 0);
+        const remaining = Math.max(0, remainingBefore - amount);
+        await supabase
+          .from('loans')
+          .update({ remaining_balance: remaining, updated_at: now })
+          .eq('id', loan.id);
+
+        const { data: repayment, error: rErr } = await supabase
+          .from('loan_repayments')
+          .insert({
+            loan_id: loan.id,
+            profile_id: loan.profile_id,
+            amount,
+            status: 'paid',
+            paid_at: now,
+            reference: txn ? txn.id : null,
+          })
+          .select('*')
+          .maybeSingle();
+        if (rErr) throw rErr;
+
+        return res.status(201).json({
+          success: true,
+          message: `Repayment of ₦${amount.toLocaleString()} applied. New loan balance: ₦${remaining.toLocaleString()}.`,
+          repayment,
+          remaining_balance: remaining,
+        });
+      }
+
+      // ── Proof-based repayment (admin verifies) ──
+      const { data: txn } = await supabase
+        .from('transactions')
+        .insert({
+          profile_id: loan.profile_id,
+          type: 'loan_repayment',
+          category: 'debit',
+          amount,
+          status: 'pending',
+          description: `Loan repayment for ${loan.loan_id || loan.id}`,
+          payment_method: paymentMethod,
+        })
+        .select('*')
+        .maybeSingle();
+
+      let depositRequest = null;
+      try {
+        const { data: dr } = await supabase
+          .from('deposit_requests')
+          .insert({
+            profile_id: loan.profile_id,
+            transaction_id: txn ? txn.id : null,
+            amount,
+            currency: 'NGN',
+            status: 'pending',
+            allocation_type: 'loan_repayment',
+            loan_id: loan.id,
+            loan_amount: amount,
+            payment_proof_url: proofUrl,
+          })
+          .select('*')
+          .maybeSingle();
+        depositRequest = dr;
+      } catch (drErr) {
+        logger.warn('loan repayment deposit_request insert failed (migration 020 pending?):', drErr.message);
+      }
+
+      const { data: repayment } = await supabase
+        .from('loan_repayments')
+        .insert({
+          loan_id: loan.id,
+          profile_id: loan.profile_id,
+          amount,
+          status: 'pending',
+          reference: txn ? txn.id : null,
+          deposit_request_id: depositRequest ? depositRequest.id : null,
+        })
+        .select('*')
+        .maybeSingle();
+
+      return res.status(202).json({
+        success: true,
+        message: 'Repayment submitted for verification. Your loan balance will be updated once an admin confirms your payment.',
+        repayment,
+        deposit_request: depositRequest,
+      });
+    } catch (err) {
+      logger.error('Loan repay error:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
   }
 );
 

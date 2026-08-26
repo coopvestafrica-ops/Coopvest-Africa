@@ -28,6 +28,7 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
   final _amountController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   String _selectedPaymentMethod = 'bank_transfer';
+  String _allocationType = 'monthly_contribution';
   bool _isProcessing = false;
   File? _proofFile;
   bool _isUploadingProof = false;
@@ -243,8 +244,9 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
 
       final result = await ref.read(walletProvider.notifier).makeContribution(
         amount: amount,
-        description: 'Wallet deposit via ${_selectedPaymentMethod.replaceAll('_', ' ')}',
+        description: '${_allocationType == 'loan_repayment' ? 'Loan repayment' : 'Wallet deposit'} via ${_selectedPaymentMethod.replaceAll('_', ' ')}',
         proofUrl: proofUrl,
+        allocationType: _allocationType,
       );
       
       // Safely extract the message from the result
@@ -500,6 +502,32 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text('Payment Allocation', style: TextStyle(fontWeight: FontWeight.bold, color: context.textPrimary)),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: _allocationType,
+                  decoration: InputDecoration(
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'monthly_contribution',
+                      child: Text('Monthly Contribution (Savings)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'loan_repayment',
+                      child: Text('Loan Repayment'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setState(() => _allocationType = value);
+                  },
+                ),
+                const SizedBox(height: 24),
+
                 AppTextField(
                   label: 'Amount',
                   hint: 'Enter deposit amount',

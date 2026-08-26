@@ -7,6 +7,7 @@ class Wallet extends Equatable {
   final double balance;
   final double totalContributions;
   final double totalSavings; // Total savings used for loan eligibility calculation
+  final double monthlySavings; // Member's pledged monthly savings contribution
   final double pendingContributions;
   final double availableForWithdrawal;
   final DateTime updatedAt;
@@ -17,6 +18,7 @@ class Wallet extends Equatable {
     required this.balance,
     required this.totalContributions,
     required this.totalSavings,
+    this.monthlySavings = 0,
     required this.pendingContributions,
     required this.availableForWithdrawal,
     required this.updatedAt,
@@ -29,6 +31,7 @@ class Wallet extends Equatable {
       balance: (json['balance'] as num).toDouble(),
       totalContributions: (json['total_contributions'] as num).toDouble(),
       totalSavings: (json['total_savings'] as num).toDouble(),
+      monthlySavings: (json['monthly_savings'] as num?)?.toDouble() ?? 0,
       pendingContributions: (json['pending_contributions'] as num).toDouble(),
       availableForWithdrawal: (json['available_for_withdrawal'] as num).toDouble(),
       updatedAt: DateTime.parse(json['updated_at'] as String),
@@ -424,7 +427,6 @@ class DepositRequest extends Equatable {
   final String currency;
   final String status; // pending | verified | rejected | cancelled
   final String? paymentMethod;
-  final String? paymentType;
   final String? paymentProofUrl;
   final String? paymentReference;
   final String? paymentDate;
@@ -444,7 +446,6 @@ class DepositRequest extends Equatable {
     required this.currency,
     required this.status,
     this.paymentMethod,
-    this.paymentType,
     this.paymentProofUrl,
     this.paymentReference,
     this.paymentDate,
@@ -474,7 +475,6 @@ class DepositRequest extends Equatable {
       currency: json['currency']?.toString() ?? 'NGN',
       status: json['status']?.toString() ?? 'pending',
       paymentMethod: json['payment_method']?.toString(),
-      paymentType: json['payment_type']?.toString(),
       paymentProofUrl: json['payment_proof_url']?.toString(),
       paymentReference: json['payment_reference']?.toString(),
       paymentDate: json['payment_date']?.toString(),
@@ -495,6 +495,6 @@ class DepositRequest extends Equatable {
 
   @override
   List<Object?> get props => [id, profileId, amount, currency, status,
-    paymentMethod, paymentType, paymentProofUrl, paymentReference, adminNotes,
+    paymentMethod, paymentProofUrl, paymentReference, adminNotes,
     verifiedBy, verifiedAt, createdAt, updatedAt];
 }

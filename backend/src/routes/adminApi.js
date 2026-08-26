@@ -1304,20 +1304,92 @@ router.patch('/deposits/:id/verify', async (req, res) => {
     }
 
     const amount = Number(deposit.amount);
-    let wallet = null;
-    try {
-      const { ensureWallet } = require('./wallet');
-      wallet = await ensureWallet(deposit.profile_id);
-    } catch (_) { /* wallet service optional */ }
+    const allocationType = deposit.allocation_type || 'monthly_contribution';
+    const loanId = deposit.loan_id || null;
+    const loanAmt = allocationType === 'mixed' && deposit.loan_amount != null
+      ? Number(deposit.loan_amount)
+      : (allocationType === 'loan_repayment' ? amount : 0);
+    const savingsAmt = allocationType === 'mixed' && deposit.savings_amount != null
+      ? Number(deposit.savings_amount)
+      : (allocationType === 'monthly_contribution' ? amount : 0);
 
+    // Credit the wallet with the savings portion (skipped for pure loan repayments).
+    let wallet = null;
     let newBalance = null;
-    if (wallet && wallet.id) {
-      newBalance = Number(wallet.balance) + amount;
-      const { error: wErr } = await supabase
-        .from('wallets')
-        .update({ balance: newBalance, last_updated: new Date().toISOString() })
-        .eq('id', wallet.id);
-      if (wErr) throw wErr;
+    if (savingsAmt > 0) {
+      try {
+        const { ensureWallet } = require('./wallet');
+        wallet = await ensureWallet(deposit.profile_id);
+      } catch (_) { /* wallet service optional */ }
+
+      if (wallet && wallet.id) {
+        newBalance = Number(wallet.balance) + savingsAmt;
+        const { error: wErr } = await supabase
+          .from('wallets')
+          .update({ balance: newBalance, last_updated: new Date().toISOString() })
+          .eq('id', wallet.id);
+        if (wErr) throw wErr;
+      }
+    }
+
+    // Reduce the loan balance with the repayment portion (if any).
+    let remainingBalance = null;
+    if (loanAmt > 0) {
+      // Prefer the explicitly linked loan, else fall back to the member's active loan.
+      let loan = null;
+      if (loanId) {
+        const { data } = await supabase
+          .from('loans')
+          .select('id, remaining_balance, total_repayment, status')
+          .eq('id', loanId)
+          .maybeSingle();
+        loan = data;
+      }
+      if (!loan) {
+        const { data } = await supabase
+          .from('loans')
+          .select('id, remaining_balance, total_repayment, status')
+          .eq('profile_id', deposit.profile_id)
+          .in('status', ['active', 'repaying', 'overdue'])
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        loan = data;
+      }
+      if (loan) {
+        const before = Number(loan.remaining_balance ?? loan.total_repayment ?? 0);
+        remainingBalance = Math.max(0, before - loanAmt);
+        await supabase
+          .from('loans')
+          .update({ remaining_balance: remainingBalance, updated_at: new Date().toISOString() })
+          .eq('id', loan.id);
+
+        // Mark the linked pending loan_repayment as paid, else insert a paid row.
+        const { data: pendingRep } = await supabase
+          .from('loan_repayments')
+          .select('id')
+          .eq('deposit_request_id', id)
+          .eq('status', 'pending')
+          .limit(1)
+          .maybeSingle();
+        if (pendingRep) {
+          await supabase
+            .from('loan_repayments')
+            .update({ status: 'paid', paid_at: new Date().toISOString() })
+            .eq('id', pendingRep.id);
+        } else {
+          await supabase
+            .from('loan_repayments')
+            .insert({
+              loan_id: loan.id,
+              profile_id: deposit.profile_id,
+              amount: loanAmt,
+              status: 'paid',
+              paid_at: new Date().toISOString(),
+              deposit_request_id: id,
+            });
+        }
+      }
     }
 
     if (deposit.transaction_id) {

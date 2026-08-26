@@ -257,11 +257,18 @@ router.post(
     body('sender_account_name').optional().isString(),
     body('sender_account_number').optional().isString(),
     body('proof_url').optional().isURL(),
+    body('allocation_type').optional().isIn(['monthly_contribution', 'loan_repayment', 'mixed']),
+    body('loan_id').optional().isString(),
+    body('savings_amount').optional().isFloat({ min: 0 }),
+    body('loan_amount').optional().isFloat({ min: 0 }),
   ],
   validate,
   async (req, res) => {
     try {
-      const { amount, description, payment_reference, payment_date, bank_name, sender_account_name, sender_account_number, proof_url } = req.body;
+      const { amount, description, payment_reference, payment_date, bank_name, sender_account_name, sender_account_number, proof_url, allocation_type, loan_id, savings_amount, loan_amount } = req.body;
+      const allocationType = allocation_type || 'monthly_contribution';
+      const savingsAmt = allocationType === 'mixed' && savings_amount != null ? Number(savings_amount) : (allocationType === 'monthly_contribution' ? Number(amount) : 0);
+      const loanAmt = allocationType === 'mixed' && loan_amount != null ? Number(loan_amount) : (allocationType === 'loan_repayment' ? Number(amount) : 0);
 
       // Create a PENDING transaction (no wallet credit yet)
       const txn = await recordTransaction(req.user.id, {
@@ -286,6 +293,10 @@ router.post(
             amount: Number(amount),
             currency: 'NGN',
             status: 'pending',
+            allocation_type: allocationType,
+            loan_id: loan_id || null,
+            savings_amount: savingsAmt > 0 ? savingsAmt : null,
+            loan_amount: loanAmt > 0 ? loanAmt : null,
             payment_reference: payment_reference || null,
             payment_date: payment_date || null,
             bank_name: bank_name || null,
@@ -310,7 +321,7 @@ router.post(
         try {
           await supabase.from('payment_proofs').insert({
             profile_id: req.user.id,
-            payment_type: 'monthly_contribution',
+            payment_type: allocationType === 'loan_repayment' ? 'loan_repayment' : 'monthly_contribution',
             amount: Number(amount),
             currency: 'NGN',
             payment_date: payment_date || new Date().toISOString(),

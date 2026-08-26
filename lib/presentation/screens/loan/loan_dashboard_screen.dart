@@ -8,6 +8,7 @@ import '../../../core/extensions/number_extensions.dart';
 import '../../../data/models/loan_models.dart';
 import '../../../core/network/api_client.dart';
 import '../../../presentation/providers/loan_provider.dart';
+import '../../../presentation/providers/wallet_provider.dart';
 import '../../../presentation/widgets/common/buttons.dart';
 import '../../../presentation/widgets/common/cards.dart';
 import 'loan_application_screen.dart';
@@ -202,6 +203,11 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
 
                 const SizedBox(height: 24),
 
+                // Monthly obligations: savings contribution vs loan repayment
+                _buildObligationsCard(loans),
+
+                const SizedBox(height: 24),
+
                 // Loan History Section
                 Text(
                   'Loan History',
@@ -250,6 +256,79 @@ class _LoanDashboardScreenState extends ConsumerState<LoanDashboardScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildObligationsCard(List<Loan> loans) {
+    final walletState = ref.watch(walletProvider);
+    final monthlyContribution = walletState.wallet?.monthlySavings ?? 0.0;
+    final activeLoans = loans.where((l) => isLoanActive(l.status)).toList();
+    final monthlyLoanRepayment = activeLoans.fold(0.0, (sum, l) => sum + l.monthlyRepayment);
+    final loanRemaining = activeLoans.fold(0.0, (sum, l) => sum + l.remainingBalance);
+
+    return AppCard(
+      backgroundColor: context.cardBackground,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Monthly Obligations',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: context.textPrimary),
+          ),
+          const SizedBox(height: 12),
+          _obligationRow(
+            'Monthly Contribution',
+            '\u20a6${monthlyContribution.toStringAsFixed(0)}',
+            CoopvestColors.primary,
+          ),
+          const SizedBox(height: 8),
+          _obligationRow(
+            'Loan Repayment',
+            monthlyLoanRepayment > 0 ? '\u20a6${monthlyLoanRepayment.toStringAsFixed(0)}' : 'None',
+            CoopvestColors.info,
+          ),
+          if (loanRemaining > 0) ...[
+            const SizedBox(height: 8),
+            _obligationRow(
+              'Loan balance remaining',
+              '\u20a6${loanRemaining.toStringAsFixed(0)}',
+              CoopvestColors.warning,
+            ),
+          ],
+          const Divider(height: 24),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Total due this month',
+                style: TextStyle(fontWeight: FontWeight.bold, color: context.textPrimary),
+              ),
+              Text(
+                '\u20a6${(monthlyContribution + monthlyLoanRepayment).toStringAsFixed(0)}',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: context.textPrimary,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _obligationRow(String label, String value, Color color) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Row(children: [
+          Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 8),
+          Text(label, style: TextStyle(color: context.textSecondary, fontSize: 13)),
+        ]),
+        Text(value, style: TextStyle(fontWeight: FontWeight.w600, color: context.textPrimary, fontSize: 13)),
+      ],
     );
   }
 
