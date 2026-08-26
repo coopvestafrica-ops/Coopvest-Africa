@@ -29,6 +29,10 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
   final _formKey = GlobalKey<FormState>();
   String _selectedPaymentMethod = 'bank_transfer';
   String _allocationType = 'monthly_contribution';
+  final _splitSavingsController = TextEditingController();
+  final _splitLoanController = TextEditingController();
+  final _splitFineController = TextEditingController();
+  final _splitFeeController = TextEditingController();
   bool _isProcessing = false;
   File? _proofFile;
   bool _isUploadingProof = false;
@@ -204,11 +208,53 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
     );
   }
 
+  Widget _splitField(String label, TextEditingController controller) {
+    return AppTextField(
+      label: label,
+      controller: controller,
+      keyboardType: TextInputType.number,
+      prefixText: '₦ ',
+      hint: '0',
+    );
+  }
+
   Future<void> _processDeposit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isProcessing = true);
     try {
       final amount = double.parse(_amountController.text.replaceAll(',', ''));
+
+      List<Map<String, dynamic>>? allocations;
+      if (_allocationType == 'mixed') {
+        double parseSplit(TextEditingController c) =>
+            double.tryParse(c.text.replaceAll(',', '')) ?? 0;
+        allocations = [
+          {'type': 'savings', 'amount': parseSplit(_splitSavingsController)},
+          {'type': 'loan_repayment', 'amount': parseSplit(_splitLoanController)},
+          {'type': 'fine', 'amount': parseSplit(_splitFineController)},
+          {'type': 'fee', 'amount': parseSplit(_splitFeeController)},
+        ].where((a) => (a['amount'] as double) > 0).toList();
+
+        final total = allocations.fold<double>(0, (s, a) => s + (a['amount'] as double));
+        if ((total - amount).abs() > 0.01) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Split amounts (₦${total.toStringAsFixed(0)}) must equal the total (₦${amount.toStringAsFixed(0)})'),
+              backgroundColor: CoopvestColors.error,
+            ),
+          );
+          setState(() => _isProcessing = false);
+          return;
+        }
+      }
+
+      final isLoanRepay = _allocationType == 'loan_repayment';
+      final isSavings = _allocationType == 'monthly_contribution';
+      String description;
+      if (_allocationType == 'mixed') description = 'Split payment';
+      else if (isLoanRepay) description = 'Loan repayment';
+      else if (isSavings) description = 'Savings contribution';
+      else description = 'Payment (${_allocationType.replaceAll('_', ' ')})';
 
       // Upload proof image if user attached one
       String? proofUrl = _proofUrl;
@@ -244,9 +290,10 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
 
       final result = await ref.read(walletProvider.notifier).makeContribution(
         amount: amount,
-        description: '${_allocationType == 'loan_repayment' ? 'Loan repayment' : 'Wallet deposit'} via ${_selectedPaymentMethod.replaceAll('_', ' ')}',
+        description: '$description via ${_selectedPaymentMethod.replaceAll('_', ' ')}',
         proofUrl: proofUrl,
         allocationType: _allocationType,
+        allocations: allocations,
       );
       
       // Safely extract the message from the result
@@ -515,11 +562,27 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
                   items: const [
                     DropdownMenuItem(
                       value: 'monthly_contribution',
-                      child: Text('Monthly Contribution (Savings)'),
+                      child: Text('Monthly Savings'),
                     ),
                     DropdownMenuItem(
                       value: 'loan_repayment',
                       child: Text('Loan Repayment'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'fine',
+                      child: Text('Fine / Penalty'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'registration_fee',
+                      child: Text('Registration Fee'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'fee',
+                      child: Text('Other Fee'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'mixed',
+                      child: Text('Split between obligations'),
                     ),
                   ],
                   onChanged: (value) {
@@ -537,6 +600,22 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
                   prefixText: '₦ ',
                   onChanged: (value) => setState(() {}),
                 ),
+
+                if (_allocationType == 'mixed') ...[
+                  const SizedBox(height: 24),
+                  Text(
+                    'Split the payment across your obligations (must sum to the total)',
+                    style: TextStyle(fontSize: 12, color: context.textSecondary),
+                  ),
+                  const SizedBox(height: 12),
+                  _splitField('To Savings', _splitSavingsController),
+                  const SizedBox(height: 12),
+                  _splitField('To Loan', _splitLoanController),
+                  const SizedBox(height: 12),
+                  _splitField('To Fine/Penalty', _splitFineController),
+                  const SizedBox(height: 12),
+                  _splitField('To Fee', _splitFeeController),
+                ],
 
                 const SizedBox(height: 24),
 

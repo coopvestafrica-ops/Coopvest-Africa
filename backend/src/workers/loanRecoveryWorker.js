@@ -145,13 +145,19 @@ async function processDue() {
 
         // ── STAGE 2: 2nd consecutive missed month — apply ₦3,000 penalty ──
         else if (missedMonths === 2) {
-          // Apply the ₦3,000 late repayment charge
-          const newBalance = (loan.outstanding_balance || loan.amount || 0) + LATE_REPAYMENT_PENALTY_NGN;
+          // Fines are separate obligations — record a member_fees row.
+          await supabase.from('member_fees').insert({
+            profile_id: profileId,
+            loan_id: loan.id,
+            fee_type: 'fine',
+            label: 'Late Loan Repayment Fine',
+            amount: LATE_REPAYMENT_PENALTY_NGN,
+            status: 'outstanding',
+          });
 
           await supabase
             .from('loans')
             .update({
-              outstanding_balance: newBalance,
               penalty_applied: true,
               penalty_amount: (loan.penalty_amount || 0) + LATE_REPAYMENT_PENALTY_NGN,
               status: 'overdue',
@@ -164,7 +170,7 @@ async function processDue() {
             profileIds: [profileId],
             channels: ['in_app', 'email'],
             title: '⚠️ Late Repayment Penalty Applied',
-            body: `A ₦3,000 late repayment charge has been added to your loan balance due to 2 consecutive missed payments. Your new outstanding balance is ₦${newBalance.toLocaleString()}. Please arrange a repayment plan immediately.`,
+            body: `A ₦3,000 late repayment fine has been added to your obligations as a separate fee due to 2 consecutive missed payments. Please arrange a repayment plan immediately.`,
           });
 
           // Flag the account (Policy: Active Default Restriction). The flag is
@@ -186,7 +192,7 @@ async function processDue() {
           // Notify admin
           await notifyAdminOfDefault(loan, 2);
 
-          logger.info(`loanRecoveryWorker: Stage 2 penalty applied — loan ${loan.loan_id || loan.id}, new balance ₦${newBalance}`);
+          logger.info(`loanRecoveryWorker: Stage 2 fine recorded — loan ${loan.loan_id || loan.id}`);
         }
 
         // ── STAGE 3: 3rd+ consecutive missed month — contact guarantors ───

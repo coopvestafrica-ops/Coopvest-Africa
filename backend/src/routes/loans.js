@@ -1037,12 +1037,26 @@ router.post(
         });
       }
 
-      const newBalance = (loan.outstanding_balance || loan.amount || 0) + PENALTY;
+      // Fines are separate obligations — create an outstanding member_fees row
+      // rather than adding the penalty to the loan balance.
+      const { data: feeRow, error: feeErr } = await supabase
+        .from('member_fees')
+        .insert({
+          profile_id: loan.profile_id,
+          loan_id: loan.id,
+          fee_type: 'fine',
+          label: 'Late Loan Repayment Fine',
+          amount: PENALTY,
+          status: 'outstanding',
+          assigned_by: req.user.id,
+        })
+        .select('id')
+        .maybeSingle();
+      if (feeErr) throw feeErr;
 
       const { data: updated, error } = await supabase
         .from('loans')
         .update({
-          outstanding_balance: newBalance,
           penalty_applied: true,
           penalty_amount: (loan.penalty_amount || 0) + PENALTY,
           status: 'overdue',
@@ -1056,15 +1070,15 @@ router.post(
 
       await auditLog(req.user.id, 'LOAN_PENALTY_APPLIED', loan.id, {
         penalty: PENALTY,
-        newBalance,
+        fee_id: feeRow ? feeRow.id : null,
         reason: 'Stage 2 — 2nd consecutive missed month (Loan Policy §4.1)',
       });
 
       res.json({
         success: true,
-        message: 'Late repayment penalty of ₦3,000 applied to loan balance.',
+        message: 'Late repayment penalty of ₦3,000 recorded as a separate fine obligation.',
         penalty: PENALTY,
-        newBalance,
+        fee_id: feeRow ? feeRow.id : null,
         loan: updated,
       });
     } catch (err) {

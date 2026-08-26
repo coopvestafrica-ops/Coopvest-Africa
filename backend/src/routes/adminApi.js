@@ -1304,91 +1304,166 @@ router.patch('/deposits/:id/verify', async (req, res) => {
     }
 
     const amount = Number(deposit.amount);
-    const allocationType = deposit.allocation_type || 'monthly_contribution';
-    const loanId = deposit.loan_id || null;
-    const loanAmt = allocationType === 'mixed' && deposit.loan_amount != null
-      ? Number(deposit.loan_amount)
-      : (allocationType === 'loan_repayment' ? amount : 0);
-    const savingsAmt = allocationType === 'mixed' && deposit.savings_amount != null
-      ? Number(deposit.savings_amount)
-      : (allocationType === 'monthly_contribution' ? amount : 0);
 
-    // Credit the wallet with the savings portion (skipped for pure loan repayments).
-    let wallet = null;
-    let newBalance = null;
-    if (savingsAmt > 0) {
-      try {
-        const { ensureWallet } = require('./wallet');
-        wallet = await ensureWallet(deposit.profile_id);
-      } catch (_) { /* wallet service optional */ }
-
-      if (wallet && wallet.id) {
-        newBalance = Number(wallet.balance) + savingsAmt;
-        const { error: wErr } = await supabase
-          .from('wallets')
-          .update({ balance: newBalance, last_updated: new Date().toISOString() })
-          .eq('id', wallet.id);
-        if (wErr) throw wErr;
+    // Normalized allocation breakdown. New-style deposits carry allocations[];
+    // legacy rows derive it from allocation_type + split amounts.
+    let allocations = Array.isArray(deposit.allocations) && deposit.allocations.length
+      ? deposit.allocations
+      : null;
+    if (!allocations) {
+      const allocationType = deposit.allocation_type || 'monthly_contribution';
+      const loanId = deposit.loan_id || null;
+      const loanAmt = allocationType === 'mixed' && deposit.loan_amount != null
+        ? Number(deposit.loan_amount)
+        : (allocationType === 'loan_repayment' ? amount : 0);
+      const savingsAmt = allocationType === 'mixed' && deposit.savings_amount != null
+        ? Number(deposit.savings_amount)
+        : (allocationType === 'monthly_contribution' ? amount : 0);
+      allocations = [];
+      if (savingsAmt > 0) allocations.push({ type: 'savings', amount: savingsAmt });
+      if (loanAmt > 0) allocations.push({ type: 'loan_repayment', amount: loanAmt, loan_id: loanId });
+      if (!allocations.length && ['fine', 'fee', 'registration_fee'].includes(allocationType)) {
+        allocations.push({ type: allocationType, amount, fee_id: deposit.fee_id || null, loan_id: loanId });
       }
     }
 
-    // Reduce the loan balance with the repayment portion (if any).
-    let remainingBalance = null;
-    if (loanAmt > 0) {
-      // Prefer the explicitly linked loan, else fall back to the member's active loan.
-      let loan = null;
-      if (loanId) {
-        const { data } = await supabase
-          .from('loans')
-          .select('id, remaining_balance, total_repayment, status')
-          .eq('id', loanId)
-          .maybeSingle();
-        loan = data;
-      }
-      if (!loan) {
-        const { data } = await supabase
-          .from('loans')
-          .select('id, remaining_balance, total_repayment, status')
-          .eq('profile_id', deposit.profile_id)
-          .in('status', ['active', 'repaying', 'overdue'])
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        loan = data;
-      }
-      if (loan) {
-        const before = Number(loan.remaining_balance ?? loan.total_repayment ?? 0);
-        remainingBalance = Math.max(0, before - loanAmt);
-        await supabase
-          .from('loans')
-          .update({ remaining_balance: remainingBalance, updated_at: new Date().toISOString() })
-          .eq('id', loan.id);
+    const results = { savings_credited: 0, loan_paid: 0, fees_paid: 0 };
+    const txTypeMap = {
+      savings: 'contribution',
+      loan_repayment: 'loan_repayment',
+      fine: 'fine_payment',
+      fee: 'fee_payment',
+      registration_fee: 'registration_fee_payment',
+    };
 
-        // Mark the linked pending loan_repayment as paid, else insert a paid row.
-        const { data: pendingRep } = await supabase
-          .from('loan_repayments')
-          .select('id')
-          .eq('deposit_request_id', id)
-          .eq('status', 'pending')
-          .limit(1)
-          .maybeSingle();
-        if (pendingRep) {
+    for (const alloc of allocations) {
+      const amt = Number(alloc.amount) || 0;
+      if (amt <= 0) continue;
+
+      if (alloc.type === 'savings') {
+        // Savings is the only allocation that credits the member's wallet.
+        try {
+          const { ensureWallet } = require('./wallet');
+          const wallet = await ensureWallet(deposit.profile_id);
+          if (wallet && wallet.id) {
+            const nb = Number(wallet.balance) + amt;
+            const { error: wErr } = await supabase
+              .from('wallets')
+              .update({ balance: nb, last_updated: new Date().toISOString() })
+              .eq('id', wallet.id);
+            if (wErr) throw wErr;
+            results.savings_credited += amt;
+          }
+        } catch (wErr) {
+          logger.warn('verify: savings wallet credit failed:', wErr.message);
+        }
+      } else if (alloc.type === 'loan_repayment') {
+        // Reduce loan balance + mark/insert loan_repayments row.
+        let loan = null;
+        if (alloc.loan_id) {
+          const { data } = await supabase
+            .from('loans')
+            .select('id, loan_id, remaining_balance, total_repayment, status')
+            .eq('id', alloc.loan_id)
+            .maybeSingle();
+          loan = data;
+        }
+        if (!loan) {
+          const { data } = await supabase
+            .from('loans')
+            .select('id, loan_id, remaining_balance, total_repayment, status')
+            .eq('profile_id', deposit.profile_id)
+            .in('status', ['active', 'repaying', 'overdue'])
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          loan = data;
+        }
+        if (loan) {
+          const before = Number(loan.remaining_balance ?? loan.total_repayment ?? 0);
+          const remaining = Math.max(0, before - amt);
           await supabase
+            .from('loans')
+            .update({ remaining_balance: remaining, updated_at: new Date().toISOString() })
+            .eq('id', loan.id);
+
+          const { data: pendingRep } = await supabase
             .from('loan_repayments')
-            .update({ status: 'paid', paid_at: new Date().toISOString() })
-            .eq('id', pendingRep.id);
-        } else {
-          await supabase
-            .from('loan_repayments')
-            .insert({
+            .select('id')
+            .eq('deposit_request_id', id)
+            .eq('status', 'pending')
+            .limit(1)
+            .maybeSingle();
+          if (pendingRep) {
+            await supabase
+              .from('loan_repayments')
+              .update({ status: 'paid', paid_at: new Date().toISOString() })
+              .eq('id', pendingRep.id);
+          } else {
+            await supabase.from('loan_repayments').insert({
               loan_id: loan.id,
               profile_id: deposit.profile_id,
-              amount: loanAmt,
+              amount: amt,
               status: 'paid',
               paid_at: new Date().toISOString(),
               deposit_request_id: id,
             });
+          }
+          results.loan_paid += amt;
         }
+      } else if (['fine', 'fee', 'registration_fee'].includes(alloc.type)) {
+        // Settle a member fee obligation: targeted fee_id, else oldest outstanding.
+        let feeRow = null;
+        if (alloc.fee_id) {
+          const { data } = await supabase
+            .from('member_fees')
+            .select('*')
+            .eq('id', alloc.fee_id)
+            .maybeSingle();
+          if (data && data.status === 'outstanding') feeRow = data;
+        }
+        if (!feeRow) {
+          const { data } = await supabase
+            .from('member_fees')
+            .select('*')
+            .eq('profile_id', deposit.profile_id)
+            .eq('status', 'outstanding')
+            .eq('fee_type', alloc.type)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          feeRow = data;
+        }
+        if (feeRow) {
+          await supabase
+            .from('member_fees')
+            .update({
+              status: 'paid',
+              paid_at: new Date().toISOString(),
+              deposit_id: id,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', feeRow.id);
+          results.fees_paid += amt;
+        } else {
+          // No matching obligation row — record as paid-through anyway.
+          results.fees_paid += amt;
+        }
+      }
+
+      // Categorized transaction row so the member's history is separated by type.
+      try {
+        await supabase.from('transactions').insert({
+          profile_id: deposit.profile_id,
+          type: txTypeMap[alloc.type] || 'deposit',
+          category: 'debit',
+          amount: amt,
+          status: 'completed',
+          description: `Verified deposit allocation (${alloc.type})`,
+          completed_at: new Date().toISOString(),
+        });
+      } catch (tErr) {
+        logger.warn('verify: allocation transaction insert failed:', tErr.message);
       }
     }
 
@@ -1396,9 +1471,7 @@ router.patch('/deposits/:id/verify', async (req, res) => {
       await supabase.from('transactions').update({
         status: 'completed',
         completed_at: new Date().toISOString(),
-        balance_before: wallet ? wallet.balance : null,
-        balance_after: newBalance,
-        metadata: { ...((deposit.transaction && deposit.transaction.metadata) || {}), verified_by: adminId, verified_at: new Date().toISOString(), deposit_request_id: id },
+        metadata: { ...((deposit.transaction && deposit.transaction.metadata) || {}), verified_by: adminId, verified_at: new Date().toISOString(), deposit_request_id: id, allocations },
       }).eq('id', deposit.transaction_id);
     }
 
@@ -1410,7 +1483,16 @@ router.patch('/deposits/:id/verify', async (req, res) => {
       .single();
     if (updateErr) throw updateErr;
 
-    res.json({ success: true, message: `Deposit of ₦${amount.toLocaleString()} verified and credited to wallet.`, deposit: updated });
+    const parts = [];
+    if (results.savings_credited > 0) parts.push(`₦${results.savings_credited.toLocaleString()} to savings`);
+    if (results.loan_paid > 0) parts.push(`₦${results.loan_paid.toLocaleString()} to loan`);
+    if (results.fees_paid > 0) parts.push(`₦${results.fees_paid.toLocaleString()} to fines/fees`);
+    res.json({
+      success: true,
+      message: `Deposit of ₦${amount.toLocaleString()} verified${parts.length ? ' — allocated ' + parts.join(' + ') : ''}.`,
+      deposit: updated,
+      allocation_results: results,
+    });
   } catch (err) {
     logger.error('admin deposit verify error:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -4354,5 +4436,215 @@ function groupBy(rows, key) {
   rows.forEach((r) => { const k = r[key] || 'unknown'; map[k] = (map[k] || 0) + 1; });
   return map;
 }
+
+/* ------------------------------------------------------------------
+ * Obligations & Fees
+ *
+ * Super admin configures fee_types; assigning a fee_type to a member
+ * creates an outstanding member_fees row. The member-facing breakdown
+ * is also exposed here for the admin dashboard.
+ * ------------------------------------------------------------------ */
+
+const SUPER_ADMIN_ROLES = ['superadmin', 'super_admin'];
+const requireSuperAdmin = (req, res, next) =>
+  SUPER_ADMIN_ROLES.includes(req.user && req.user.role)
+    ? next()
+    : res.status(403).json({ success: false, error: 'Super admin access required' });
+
+// GET /api/admin/members/:id/obligations — breakdown used by the dashboard
+router.get('/members/:id/obligations', async (req, res) => {
+  try {
+    const { computeObligations } = require('./wallet');
+    const obligations = await computeObligations(req.params.id);
+    // Wallet balance for the dashboard header
+    const { data: wallet } = await supabase
+      .from('wallets')
+      .select('balance')
+      .eq('profile_id', req.params.id)
+      .maybeSingle();
+    const { data: paidFees } = await supabase
+      .from('member_fees')
+      .select('id, fee_type, label, amount, paid_at')
+      .eq('profile_id', req.params.id)
+      .eq('status', 'paid')
+      .order('paid_at', { ascending: false })
+      .limit(25);
+    res.json({
+      success: true,
+      obligations,
+      wallet_balance: wallet ? Number(wallet.balance) : 0,
+      paid_fees: paidFees || [],
+    });
+  } catch (err) {
+    logger.error('admin obligations error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/admin/fee-types — any admin may read (needed for assignment UI)
+router.get('/fee-types', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('fee_types')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, fee_types: data || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/admin/fee-types — super admin only
+router.post(
+  '/fee-types',
+  requireSuperAdmin,
+  [
+    body('name').notEmpty(),
+    body('category').isIn(['registration_fee', 'fee', 'fine']),
+    body('amount').isFloat({ min: 0 }),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { name, category, amount, description } = req.body;
+      const { data, error } = await supabase
+        .from('fee_types')
+        .insert({
+          name,
+          category,
+          amount: Number(amount),
+          description: description || null,
+          created_by: req.user.id,
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      await auditLog(req.user.id, 'FEE_TYPE_CREATED', data.id, { name, category, amount });
+      res.status(201).json({ success: true, fee_type: data });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+// PATCH /api/admin/fee-types/:id — super admin only
+router.patch(
+  '/fee-types/:id',
+  requireSuperAdmin,
+  [
+    body('name').optional().notEmpty(),
+    body('category').optional().isIn(['registration_fee', 'fee', 'fine']),
+    body('amount').optional().isFloat({ min: 0 }),
+    body('is_active').optional().isBoolean(),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const updates = {};
+      ['name', 'category', 'description'].forEach((k) => {
+        if (req.body[k] !== undefined) updates[k] = req.body[k];
+      });
+      if (req.body.amount !== undefined) updates.amount = Number(req.body.amount);
+      if (req.body.is_active !== undefined) updates.is_active = req.body.is_active;
+      updates.updated_at = new Date().toISOString();
+
+      const { data, error } = await supabase
+        .from('fee_types')
+        .update(updates)
+        .eq('id', req.params.id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      await auditLog(req.user.id, 'FEE_TYPE_UPDATED', req.params.id, updates);
+      res.json({ success: true, fee_type: data });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+// POST /api/admin/fee-types/:id/assign — assign a fee to a member
+router.post(
+  '/fee-types/:id/assign',
+  [body('profile_id').notEmpty()],
+  validate,
+  async (req, res) => {
+    try {
+      const { data: ft, error } = await supabase
+        .from('fee_types')
+        .select('*')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (error) throw error;
+      if (!ft) return res.status(404).json({ success: false, error: 'Fee type not found' });
+
+      const amount = req.body.amount != null ? Number(req.body.amount) : Number(ft.amount);
+      const { data: fee, error: insErr } = await supabase
+        .from('member_fees')
+        .insert({
+          profile_id: req.body.profile_id,
+          fee_type_id: ft.id,
+          fee_type: ft.category,
+          label: req.body.label || ft.name,
+          amount,
+          status: 'outstanding',
+          assigned_by: req.user.id,
+        })
+        .select('*')
+        .single();
+      if (insErr) throw insErr;
+      await auditLog(req.user.id, 'FEE_ASSIGNED', fee.id, {
+        profile_id: req.body.profile_id,
+        fee_type: ft.name,
+        amount,
+      });
+      res.status(201).json({ success: true, member_fee: fee });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+// GET /api/admin/member-fees — list outstanding (or filtered) member fees
+router.get('/member-fees', async (req, res) => {
+  try {
+    let q = supabase
+      .from('member_fees')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (req.query.status) q = q.eq('status', req.query.status);
+    if (req.query.profile_id) q = q.eq('profile_id', req.query.profile_id);
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ success: true, member_fees: data || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PATCH /api/admin/member-fees/:id — admin may waive an outstanding fee
+router.patch('/member-fees/:id', async (req, res) => {
+  try {
+    const { status } = req.body || {};
+    if (!['paid', 'waived', 'outstanding'].includes(status)) {
+      return res.status(400).json({ success: false, error: 'status must be paid|waived|outstanding' });
+    }
+    const updates = { status, updated_at: new Date().toISOString() };
+    if (status === 'paid') updates.paid_at = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('member_fees')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    await auditLog(req.user.id, 'MEMBER_FEE_UPDATED', req.params.id, { status });
+    res.json({ success: true, member_fee: data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 module.exports = router;
