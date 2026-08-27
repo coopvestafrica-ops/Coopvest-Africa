@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../config/app_config.dart';
 import '../../core/network/api_client.dart';
 import '../../core/utils/utils.dart';
 import 'package:dio/dio.dart';
@@ -24,7 +25,19 @@ class KYCRepository {
   /// national_id, selfie, status, submitted_at). Map that into KYCSubmission.
   Future<KYCSubmission> getKYCStatus() async {
     try {
-      final response = await _apiClient.get('/kyc/status');
+      // This call gates AuthGuard navigation, so pin it to the fast
+      // kycStatusTimeout instead of the shared 60s apiTimeout. Without this, a
+      // slow/cold-starting backend stalls the app behind a loading spinner for
+      // up to a minute. On timeout/error the provider falls through to the
+      // profile-driven routing below rather than dead-ending the member.
+      final response = await _apiClient.get(
+        '/kyc/status',
+        options: Options(
+          connectTimeout: AppConfig.kycStatusTimeout,
+          receiveTimeout: AppConfig.kycStatusTimeout,
+          sendTimeout: AppConfig.kycStatusTimeout,
+        ),
+      );
       final data = response is Map<String, dynamic> ? response : <String, dynamic>{};
       // The status row is nested under 'kyc'; fall back to the response itself
       // for older payloads.

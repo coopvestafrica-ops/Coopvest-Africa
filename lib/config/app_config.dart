@@ -12,6 +12,10 @@ class AppConfig {
   // API Configuration
   static String get apiBaseUrl => EnvironmentContext.config.apiBaseUrl;
   static const Duration apiTimeout = Duration(seconds: 60);
+  // Fast timeout for the KYC status probe. AuthGuard gates navigation on this
+  // call, so a slow or cold-starting backend must not leave the member staring
+  // at a loading screen for the full 60s apiTimeout.
+  static const Duration kycStatusTimeout = Duration(seconds: 8);
   static const int maxRetries = 3;
 
   // Session Configuration
