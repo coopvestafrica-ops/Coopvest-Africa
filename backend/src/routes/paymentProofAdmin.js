@@ -516,6 +516,44 @@ router.post(
         }
       }
 
+      // Registration fee approval → mark the fee as paid and activate the
+      // membership (the activation gate: kyc_verified AND registration_fee_paid).
+      // Idempotent — only flips the flag once. Also settles the corresponding
+      // member_fees registration_fee obligation so the wallet/obligations view
+      // no longer lists it as outstanding.
+      if (proof.payment_type === 'registration_fee' && !proof.profile_id === false) {
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('id, registration_fee_paid')
+            .eq('id', proof.profile_id)
+            .maybeSingle();
+
+          if (profile && profile.registration_fee_paid !== true) {
+            await supabase
+              .from('profiles')
+              .update({
+                registration_fee_paid: true,
+                registration_fee_paid_at: now,
+                registration_completed: true,
+                updated_at: now,
+              })
+              .eq('id', proof.profile_id);
+            logger.info(`Registration fee verified — membership activated for profile ${proof.profile_id}`);
+          }
+
+          // Settle any outstanding registration_fee obligation for this member.
+          await supabase
+            .from('member_fees')
+            .update({ status: 'paid', paid_at: now, deposit_id: proof.id })
+            .eq('profile_id', proof.profile_id)
+            .eq('fee_type', 'registration_fee')
+            .eq('status', 'outstanding');
+        } catch (applyFeeErr) {
+          logger.error('Apply registration-fee activation failed (non-fatal):', applyFeeErr.message);
+        }
+      }
+
       // Get the created receipt
       const { data: receipt } = await supabase
         .from('digital_receipts')

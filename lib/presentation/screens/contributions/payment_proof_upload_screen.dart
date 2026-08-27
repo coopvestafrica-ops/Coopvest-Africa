@@ -10,9 +10,19 @@ import '../../../data/models/payment_proof_model.dart';
 import '../../widgets/common/buttons.dart';
 
 /// Payment Proof Upload Screen
-/// Allows members to submit proof of payment after making direct contributions
+/// Allows members to submit proof of payment after making direct contributions.
+///
+/// Can be opened pre-configured for a specific payment type (e.g. the
+/// registration-fee activation flow) with an optional pre-filled amount.
 class PaymentProofUploadScreen extends ConsumerStatefulWidget {
-  const PaymentProofUploadScreen({super.key});
+  final PaymentProofType? initialPaymentType;
+  final double? prefillAmount;
+
+  const PaymentProofUploadScreen({
+    super.key,
+    this.initialPaymentType,
+    this.prefillAmount,
+  });
 
   @override
   ConsumerState<PaymentProofUploadScreen> createState() => _PaymentProofUploadScreenState();
@@ -41,6 +51,15 @@ class _PaymentProofUploadScreenState extends ConsumerState<PaymentProofUploadScr
   @override
   void initState() {
     super.initState();
+    // Apply any pre-configured payment type / amount from the caller (e.g. the
+    // account-activation flow passes registration_fee + entranceFee).
+    if (widget.initialPaymentType != null) {
+      _selectedPaymentType = widget.initialPaymentType;
+    }
+    final prefill = widget.prefillAmount;
+    if (prefill != null && prefill > 0) {
+      _amountController.text = prefill.toStringAsFixed(0);
+    }
     _loadBankAccounts();
   }
 

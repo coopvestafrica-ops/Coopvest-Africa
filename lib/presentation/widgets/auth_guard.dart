@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../config/theme_config.dart';
+import '../../data/models/auth_models.dart';
 import '../../data/models/kyc_models.dart';
 import '../providers/auth_provider.dart';
 import '../providers/kyc_provider.dart';
 import '../screens/auth/registration_onboarding_screen.dart';
 import '../screens/kyc/kyc_employment_details_screen.dart';
+import '../screens/membership/account_activation_screen.dart';
 
 /// AuthGuard determines where to send the user based on their auth state:
 /// - Not authenticated → child (Welcome/Login)
@@ -104,7 +106,16 @@ class _AuthGuardState extends ConsumerState<AuthGuard> {
         // Member hasn't submitted KYC yet — guide them through it.
         return const KYCEmploymentDetailsScreen(isFromRegistration: false);
       }
-      // KYC submitted (pending review / approved / rejected) → dashboard.
+      // KYC submitted — now enforce the membership activation gate:
+      // if the member's KYC is approved but the registration fee hasn't been
+      // settled, route them to the Account Activation screen instead of the
+      // dashboard. The server-side gate is authoritative; this mirrors it so
+      // the mobile UI shows the correct onboarding step.
+      final activation = _activationGate(user);
+      if (activation == _ActivationStage.kycApprovedFeePending) {
+        return const AccountActivationScreen();
+      }
+      // Everything satisfied (or KYC awaiting admin approval) → dashboard.
       return widget.child;
     }
 
@@ -114,6 +125,13 @@ class _AuthGuardState extends ConsumerState<AuthGuard> {
     final profileStatus = (user?.kycStatus ?? '').toLowerCase();
     if (_profileSubmitted(profileStatus) || _guardTimedOut) {
       _scheduleSilentKycRetry();
+      // Enforce the activation gate from the profile alone: if the backend says
+      // KYC is approved but the registration fee isn't settled yet, route to
+      // Account Activation rather than the dashboard.
+      final activation = _activationGate(user);
+      if (activation == _ActivationStage.kycApprovedFeePending) {
+        return const AccountActivationScreen();
+      }
       return widget.child;
     }
 
@@ -152,6 +170,27 @@ class _AuthGuardState extends ConsumerState<AuthGuard> {
     );
   }
 
+  /// Determines the membership-activation stage from the profile alone.
+  ///
+  /// The activation screen only renders when the *backend* confirms KYC is
+  /// approved (kyc_verified) but the registration fee is not yet settled. A
+  /// member whose KYC is merely submitted-but-awaiting-approval, or a profile
+  /// that is 'unknown' (backend unreachable) is NOT routed here — we must never
+  /// block an existing member behind a stale/ambiguous flag.
+  _ActivationStage _activationGate(User? user) {
+    if (user == null) return _ActivationStage.active;
+    final kycStatus = (user.kycStatus ?? '').toLowerCase();
+    final kycApproved = kycStatus == 'approved' || kycStatus == 'verified';
+    if (!kycApproved) {
+      // KYC not (yet) confirmed approved — not the activation screen's job.
+      return _ActivationStage.awaitingKyc;
+    }
+    if (!user.registrationFeePaid) {
+      return _ActivationStage.kycApprovedFeePending;
+    }
+    return _ActivationStage.active;
+  }
+
   /// True when the member has already submitted KYC, i.e. their KYC record
   /// carries a "submitted" lifecycle status (not just the initial "pending"
   /// draft that exists before any submission).
@@ -163,6 +202,17 @@ class _AuthGuardState extends ConsumerState<AuthGuard> {
         status == 'approved' ||
         status == 'rejected';
   }
+}
+
+/// Membership-activation stages used by AuthGuard to decide between the
+/// dashboard, the KYC flow, and the Account Activation (registration fee) screen.
+enum _ActivationStage {
+  /// KYC not yet confirmed approved — handled by the KYC flow.
+  awaitingKyc,
+  /// KYC approved but registration fee not settled → Account Activation screen.
+  kycApprovedFeePending,
+  /// Fully activated (or KYC awaiting admin approval / unflagged) → dashboard.
+  active,
 }
 
 /// Branded loading placeholder shown only while AuthGuard waits on the

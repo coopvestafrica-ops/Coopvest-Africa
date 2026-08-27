@@ -216,10 +216,121 @@ const requireService = (req, res, next) => {
   return res.status(401).json({ success: false, error: 'Invalid or missing service token' });
 };
 
+// Require a specific role (or set of roles). Super Admin always passes.
+function requireRole(roles) {
+  const allowed = Array.isArray(roles) ? roles : [roles];
+  return (req, res, next) => {
+    return authenticate(req, res, () => {
+      if (!req.user) return res.status(401).json({ success: false, error: 'Not authenticated' });
+      if (['superadmin', 'super_admin'].includes(req.user.role)) return next();
+      if (allowed.includes(req.user.role)) return next();
+      res.status(403).json({ success: false, error: 'Insufficient role' });
+    });
+  };
+}
+
+// Super Admin only — used for sensitive operations (emergency controls,
+// approval decisions, policy changes).
+const requireSuperAdmin = requireRole(['superadmin', 'super_admin']);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Membership activation gate
+// ─────────────────────────────────────────────────────────────────────────────
+// Gates full member dashboard access behind the onboarding funnel:
+//
+//   REGISTERED → PHONE/EMAIL VERIFIED → KYC APPROVED → REGISTRATION FEE PAID
+//                                                                 → ACCOUNT ACTIVE
+//
+// Server-side enforcement only — never trust a client-side (Flutter) gate, a
+// member could otherwise reach protected endpoints by manipulating the app.
+// A member may access onboarding/KYC/payment endpoints regardless, but must
+// satisfy BOTH of the following before money/disbursement/financial routes:
+//   - kyc_verified = TRUE
+//   - registration_fee_paid = TRUE
+//
+// The exact stage is made machine-readable on the response so the mobile app
+// can render the right onboarding screen instead of a generic 403.
+const ACTIVATION_BLOCKED = 'ACTIVATION_BLOCKED';
+
+async function loadGateProfile(profileId) {
+  const { data } = await supabase
+    .from('profiles')
+    .select('id, kyc_verified, registration_fee_paid, membership_status, is_active')
+    .eq('id', profileId)
+    .maybeSingle();
+  return data;
+}
+
+/**
+ * Attach the member's activation-gate summary to req so downstream handlers
+ * (e.g. /auth/me) can expose it without an extra query. Safe to call after
+ * `authenticate`.
+ */
+async function attachGateStatus(req, res, next) {
+  try {
+    if (req.user && req.user.id) {
+      const profile = await loadGateProfile(req.user.id);
+      req.gate = gateStatusFor(profile);
+    } else {
+      req.gate = { activated: false, kyc_approved: false, registration_fee_paid: false };
+    }
+  } catch (err) {
+    logger.warn('attachGateStatus: profile lookup failed:', err.message);
+    req.gate = { activated: false, kyc_approved: false, registration_fee_paid: false };
+  }
+  next();
+}
+
+/** Build a stable, machine-readable gate summary from a profiles row. */
+function gateStatusFor(profile) {
+  const kycApproved = profile?.kyc_verified === true;
+  const feePaid = profile?.registration_fee_paid === true;
+  const blocked = profile?.is_active === false ||
+    profile?.membership_status === 'terminated';
+  return {
+    activated: kycApproved && feePaid && !blocked,
+    kyc_approved: kycApproved,
+    registration_fee_paid: feePaid,
+    blocked,
+  };
+}
+
+/**
+ * Require the member to have passed the activation gate (KYC approved AND
+ * registration fee paid). Returns a structured 403 with `code:
+ * ACTIVATION_BLOCKED` and a `gate` breakdown so the client can route to the
+ * correct onboarding step instead of hiding the dashboard in one place.
+ */
+function requireActivated(req, res, next) {
+  return authenticate(req, res, async () => {
+    try {
+      const profile = await loadGateProfile(req.user.id);
+      const gate = gateStatusFor(profile);
+      req.gate = gate;
+      if (gate.activated) return next();
+      return res.status(403).json({
+        success: false,
+        error: 'Your membership has not been fully activated. Complete KYC verification and pay the registration fee to unlock your member dashboard.',
+        code: ACTIVATION_BLOCKED,
+        gate,
+      });
+    } catch (err) {
+      logger.error('requireActivated: gate check failed:', err.message);
+      return res.status(500).json({ success: false, error: 'Failed to verify membership status' });
+    }
+  });
+}
+
 module.exports = {
   authenticate,
   optionalAuth,
   requireAdmin,
   requireService,
+  requireRole,
+  requireSuperAdmin,
   decodeSessionId,
+  requireActivated,
+  attachGateStatus,
+  gateStatusFor,
+  ACTIVATION_BLOCKED,
 };
