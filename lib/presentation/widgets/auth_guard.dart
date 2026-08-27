@@ -68,7 +68,7 @@ class _AuthGuardState extends ConsumerState<AuthGuard> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authProvider);
     final user = authState.user;
 

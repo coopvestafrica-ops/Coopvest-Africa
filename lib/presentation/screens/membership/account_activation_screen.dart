@@ -23,7 +23,7 @@ class AccountActivationScreen extends ConsumerWidget {
   const AccountActivationScreen({super.key, this.paymentPendingNote});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
