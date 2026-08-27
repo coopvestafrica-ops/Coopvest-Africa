@@ -205,15 +205,15 @@ class _SplashScreenState extends State<SplashScreen>
         
         return Container(
           decoration: const BoxDecoration(
-            // These colors are sampled from the approved splash artwork so the
-            // image and the Flutter surface read as one continuous composition.
+            // Soft mint tones complement the supplied navy and green logo without
+            // competing with the wordmark or tagline.
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                Color(0xFF062D0A),
-                Color(0xFF0A4A13),
-                Color(0xFF062C0A),
+                Color(0xFFF7FAF8),
+                Color(0xFFE6F3EA),
+                Color(0xFFF1F7F3),
               ],
               stops: [0.0, 0.52, 1.0],
             ),
@@ -237,11 +237,11 @@ class _SplashScreenState extends State<SplashScreen>
                       width: 6 + (index % 4) * 2,
                       height: 6 + (index % 4) * 2,
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.6),
+                        color: const Color(0xFF0D3B66).withOpacity(0.16),
                         borderRadius: BorderRadius.circular(3),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.white.withOpacity(0.3),
+                            color: const Color(0xFF0D3B66).withOpacity(0.10),
                             blurRadius: 4,
                             spreadRadius: 1,
                           ),
@@ -272,8 +272,8 @@ class _SplashScreenState extends State<SplashScreen>
                             child: Image.asset(
                               'assets/images/splash-logo-transparent.png',
                               fit: BoxFit.contain,
-                              // The cleaned transparent asset sits directly on the matched
-                              // dark-emerald surface without a visible image rectangle.
+                              // The supplied transparent asset sits directly on the complementary
+                              // mint surface without a visible image rectangle.
                               frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
                                 if (wasSynchronouslyLoaded || frame != null) {
                                   return AnimatedOpacity(
@@ -306,7 +306,7 @@ class _SplashScreenState extends State<SplashScreen>
                         child: CircularProgressIndicator(
                           strokeWidth: 3,
                           valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white.withOpacity(0.9),
+                            const Color(0xFF0D3B66).withOpacity(0.82),
                           ),
                         ),
                       ),
@@ -320,7 +320,7 @@ class _SplashScreenState extends State<SplashScreen>
                           vertical: 10,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
+                          color: const Color(0xFF0D3B66).withOpacity(0.08),
                           borderRadius: BorderRadius.circular(30),
                         ),
                         child: Row(
@@ -328,14 +328,14 @@ class _SplashScreenState extends State<SplashScreen>
                           children: [
                             Icon(
                               Icons.timer_outlined,
-                              color: Colors.white.withOpacity(0.9),
+                              color: const Color(0xFF0D3B66).withOpacity(0.82),
                               size: 20,
                             ),
                             const SizedBox(width: 8),
                             Text(
                               '${_elapsedSeconds}s / ${splashDurationSeconds}s',
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.9),
+                                color: const Color(0xFF0D3B66).withOpacity(0.82),
                                 fontSize: 14,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -365,11 +365,11 @@ class _SplashScreenState extends State<SplashScreen>
                             width: 10,
                             height: 10 + (bounceHeight * 6), // Bouncing height
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(opacity),
+                              color: const Color(0xFF0D3B66).withOpacity(opacity * 0.72),
                               borderRadius: BorderRadius.circular(5),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.white.withOpacity(opacity * 0.5),
+                                  color: const Color(0xFF0D3B66).withOpacity(opacity * 0.32),
                                   blurRadius: 4 + bounceHeight * 4,
                                   spreadRadius: bounceHeight * 2,
                                 ),
