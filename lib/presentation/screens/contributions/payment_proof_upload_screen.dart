@@ -307,7 +307,7 @@ class _PaymentProofUploadScreenState extends ConsumerState<PaymentProofUploadScr
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Submit Payment Proof'),
