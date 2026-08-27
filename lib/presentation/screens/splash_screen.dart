@@ -111,6 +111,17 @@ class _SplashScreenState extends State<SplashScreen> {
   Widget build(BuildContext context) {
     if (!_showSplash) return widget.child;
 
+    final screenSize = MediaQuery.sizeOf(context);
+    final compactLayout = screenSize.height < 500;
+    final calculatedLogoSize = (screenSize.height *
+            (compactLayout ? 0.62 : 0.55))
+        .clamp(180.0, 320.0)
+        .toDouble();
+    final logoSize = calculatedLogoSize > screenSize.width * 0.86
+        ? screenSize.width * 0.86
+        : calculatedLogoSize;
+    final verticalGap = compactLayout ? 20.0 : 40.0;
+
     return Container(
       decoration: const BoxDecoration(
         // Soft mint tones complement the supplied navy and green logo without
@@ -126,13 +137,14 @@ class _SplashScreenState extends State<SplashScreen> {
           stops: [0.0, 0.52, 1.0],
         ),
       ),
-      child: Center(
-        child: Column(
+      child: SafeArea(
+        child: Center(
+          child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             SizedBox(
-              width: 320,
-              height: 320,
+              width: logoSize,
+              height: logoSize,
               child: Image.asset(
                 'assets/images/splash-logo-transparent.png',
                 fit: BoxFit.contain,
@@ -141,7 +153,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 },
               ),
             ),
-            const SizedBox(height: 40),
+            SizedBox(height: verticalGap),
             // The timer updates once per second but has no visual animation.
             Container(
               padding: const EdgeInsets.symmetric(
@@ -172,7 +184,8 @@ class _SplashScreenState extends State<SplashScreen> {
                 ],
               ),
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );
