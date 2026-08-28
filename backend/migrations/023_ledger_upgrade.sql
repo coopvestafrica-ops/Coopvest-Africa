@@ -15,6 +15,31 @@
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
+-- 0. Base ledger table (created if the optional admin_platform migration was
+--    never run). Existing installations that already have it are unchanged.
+-- ---------------------------------------------------------------------------
+create table if not exists public.ledger_entries (
+  id              uuid primary key default gen_random_uuid(),
+  profile_id      uuid references public.profiles(id) on delete set null,
+  reference       text,
+  type            text not null default 'adjustment',
+  description     text,
+  debit           numeric(14,2) not null default 0,
+  credit          numeric(14,2) not null default 0,
+  source          text not null default 'system',
+  status          text not null default 'completed',
+  initiated_by    uuid,
+  reversed        boolean not null default false,
+  reversal_of     uuid,
+  metadata        jsonb not null default '{}'::jsonb,
+  created_at      timestamptz not null default now()
+);
+create index if not exists ledger_entries_profile_idx on public.ledger_entries (profile_id, created_at desc);
+create index if not exists ledger_entries_reference_idx on public.ledger_entries (reference);
+create index if not exists ledger_entries_reversal_of_idx on public.ledger_entries (reversal_of);
+create index if not exists ledger_entries_created_at_idx on public.ledger_entries (created_at desc);
+
+-- ---------------------------------------------------------------------------
 -- 1. leapyear-safe sequential transaction numbers  CV-YYYY-NNNNNN
 -- ---------------------------------------------------------------------------
 create table if not exists public.ledger_serial (
