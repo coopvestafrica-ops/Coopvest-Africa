@@ -260,10 +260,21 @@ router.get('/ledger', async (req, res) => {
     let count = 0;
     let usedFallback = false;
 
+    // Search by transaction ID (e.g. CV-2026-000001) is handled as a
+    // reference/txn filter; it narrows to the match so the audit record is
+    // instantly retrievable.
     let baseQuery = supabase.from('ledger_entries').select('*', { count: 'exact' });
     if (req.query.profileId) baseQuery = baseQuery.eq('profile_id', req.query.profileId);
     if (req.query.type) baseQuery = baseQuery.eq('type', req.query.type);
+    if (req.query.id) baseQuery = baseQuery.or(`txn_no.eq.${req.query.id},reference.eq.${req.query.id}`);
     if (req.query.reference) baseQuery = baseQuery.eq('reference', req.query.reference);
+    if (req.query.memberName) baseQuery = baseQuery.ilike('member_name', `%${req.query.memberName}%`);
+    if (req.query.organization) baseQuery = baseQuery.eq('organization', req.query.organization);
+    if (req.query.paymentMethod) baseQuery = baseQuery.eq('payment_method', req.query.paymentMethod);
+    if (req.query.amount) baseQuery = baseQuery.eq('amount', req.query.amount);
+    if (req.query.status) baseQuery = baseQuery.eq('status', req.query.status);
+    if (req.query.source) baseQuery = baseQuery.eq('source', req.query.source);
+    if (req.query.reconciled) baseQuery = baseQuery.eq('reconciled', req.query.reconciled === 'true');
     if (req.query.from) baseQuery = baseQuery.gte('created_at', req.query.from);
     if (req.query.to) baseQuery = baseQuery.lte('created_at', req.query.to);
     const r1 = await baseQuery.order('created_at', { ascending: false }).range((p - 1) * l, p * l - 1);
@@ -408,6 +419,281 @@ router.post(
     }
   }
 );
+// ─────────────────────────────────────────────────────────────────────────────
+// 2b. LEDGER DASHBOARD TOTALS + ADJUSTMENTS + CSV EXPORT + BANK RECONCILIATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Ledger dashboard totals: money in/out and per-category subtotals for the
+// filtered date range. Used by the Financial Dashboard and for the
+// Reconciliation Status summary.
+router.get('/ledger/dashboard', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('ledger_entries')
+      .select('type, amount, debit, credit, status, created_at')
+      .not('reversed', 'eq', true)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    // Apply date range if provided (created_at timestamps).
+    const from = req.query.from ? new Date(req.query.from).getTime() : null;
+    const to = req.query.to ? new Date(req.query.to).getTime() : null;
+    const totals = {
+      totalMoneyIn: 0,
+      totalMoneyOut: 0,
+      totalContributions: 0,
+      totalLoanRepayments: 0,
+      totalLoansDisbursed: 0,
+      totalFees: 0,
+      totalPenalties: 0,
+      totalOperatingExpenses: 0,
+    };
+    let reconcilable = 0;
+    let reconciled = 0;
+    let discrepancy = 0;
+
+    (data || []).forEach((e) => {
+      const amount = Number(e.amount != null ? e.amount : (e.credit || 0));
+      const credit = Number(e.credit || 0);
+      const debit = Number(e.debit || 0);
+      const ts = e.created_at ? new Date(e.created_at).getTime() : null;
+      if (from && ts && ts < from) return;
+      if (to && ts && ts > to) return;
+
+      if (credit) totals.totalMoneyIn += credit;
+      if (debit) totals.totalMoneyOut += debit;
+      totals.totalMoneyIn = Math.max(totals.totalMoneyIn, 0);
+
+      const t = (e.type || '').toLowerCase();
+      if (t.includes('contribution') || t.includes('saving')) totals.totalContributions += amount;
+      if (t.includes('loan') && t.includes('repay')) totals.totalLoanRepayments += amount;
+      if (t.includes('loan') && (t.includes('disburs') || t.includes('disburse'))) totals.totalLoansDisbursed += amount;
+      if (t.includes('fee') || t.includes('registration')) totals.totalFees += amount;
+      if (t.includes('fine') || t.includes('penalt')) totals.totalPenalties += amount;
+      if (t.includes('expense') || t.includes('operating')) totals.totalOperatingExpenses += amount;
+      if (e.reconciled) reconciled += amount;
+      else if (e.status === 'completed') reconcilable += amount;
+    });
+
+    let reconciliationStatus = 'reconciled';
+    if (discrepancy > 0) reconciliationStatus = 'discrepancy';
+    else if (reconcilable > reconciled) reconciliationStatus = 'pending';
+
+    // Discrepancy: reconcileable entries that were never matched.
+    const discrepancyValue = Math.max(0, reconcilable - reconciled);
+
+    res.json({
+      success: true,
+      totals,
+      reconciliation: {
+        status: reconciliationStatus, // 'reconciled' | 'pending' | 'discrepancy'
+        reconciled,
+        reconcilable,
+        discrepancy: discrepancyValue,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Audited adjustment — append-only. Creates a new ledger entry that records a
+// correction rather than mutating history. Requires a reason and, for
+// non-super-admin, an approver (approved_by) id; the original record is never
+// edited.
+router.post('/ledger/adjust', [
+  body('amount').isNumeric(),
+  body('type').isString().notEmpty(),
+  body('reason').isString().notEmpty(),
+  body('profile_id').optional().isUUID(),
+  body('direction').isIn(['credit', 'debit']).optional(),
+  body('approved_by').optional().isUUID(),
+  body('payment_method').optional().isString(),
+  body('bank_account').optional().isString(),
+  body('reference').optional().isString(),
+], validate, async (req, res) => {
+  try {
+    if (!isSuperAdmin(req)) {
+      return res.status(403).json({ success: false, error: 'Only the Super Admin may post ledger adjustments' });
+    }
+    const now = new Date().toISOString();
+    const amount = Number(req.body.amount);
+    const direction = req.body.direction || 'credit';
+    const profileId = req.body.profile_id || null;
+
+    // Capture the profile name if we have a member context.
+    let memberName = null;
+    let membershipId = null;
+    if (profileId) {
+      const { data: pf } = await supabase.from('profiles').select('name, user_id').eq('id', profileId).maybeSingle();
+      memberName = pf?.name || null;
+      membershipId = pf?.user_id || null;
+    }
+
+    const txn = await supabase.from('ledger_entries').insert({
+      profile_id: profileId,
+      reference: req.body.reference || null,
+      type: `adjustment:${req.body.type}`,
+      description: `Manual adjustment — ${req.body.reason}`,
+      debit: direction === 'debit' ? amount : 0,
+      credit: direction === 'credit' ? amount : 0,
+      amount: direction === 'debit' ? -amount : amount,
+      source: 'admin-adjustment',
+      status: 'completed',
+      initiated_by: req.user.id,
+      approved_by: req.body.approved_by || req.user.id,
+      requested_by: req.user.id,
+      member_name: memberName,
+      membership_id: membershipId,
+      payment_method: req.body.payment_method || null,
+      bank_account: req.body.bank_account || null,
+      allocation: {},
+    }).select('*').single();
+    res.json({ success: true, entry: txn.data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// CSV export with the current filters applied.
+router.get('/ledger/export.csv', async (req, res) => {
+  try {
+    // Reuse the same filtering logic as GET /ledger against ledger_entries.
+    let q = supabase.from('ledger_entries').select('txn_no, created_at, member_name, membership_id, organization, type, amount, debit, credit, payment_method, bank_account, reference, description, status, source, reconciled, initiated_by, approved_by');
+    if (req.query.profileId) q = q.eq('profile_id', req.query.profileId);
+    if (req.query.type) q = q.eq('type', req.query.type);
+    if (req.query.reference) q = q.eq('reference', req.query.reference);
+    if (req.query.from) q = q.gte('created_at', req.query.from);
+    if (req.query.to) q = q.lte('created_at', req.query.to);
+    if (req.query.memberName) q = q.ilike('member_name', `%${req.query.memberName}%`);
+    if (req.query.organization) q = q.eq('organization', req.query.organization);
+    if (req.query.paymentMethod) q = q.eq('payment_method', req.query.paymentMethod);
+    if (req.query.status) q = q.eq('status', req.query.status);
+    const { data, error } = await q.order('created_at', { ascending: false }).limit(5000);
+    if (error) throw error;
+
+    const esc = (v) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ['Transaction ID', 'Date', 'Member', 'Membership ID', 'Organization', 'Type', 'Amount', 'Debit', 'Credit', 'Payment Method', 'Bank Account', 'Reference', 'Description', 'Status', 'Source', 'Reconciled', 'Initiated By', 'Approved By'];
+    const lines = (data || []).map((r) => [
+      r.txn_no, r.created_at, r.member_name, r.membership_id, r.organization, r.type,
+      r.amount, r.debit, r.credit, r.payment_method, r.bank_account, r.reference,
+      r.description, r.status, r.source, r.reconciled,
+      r.initiated_by, r.approved_by,
+    ].map(esc).join(','));
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="coopvest-ledger.csv"');
+    res.send([header.join(','), ...lines].join('\n'));
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ---- Bank reconciliation ----------------------------------------------------
+// Import one or more raw bank-statement lines, then auto-match against ledger
+// entries by reference + amount.
+router.post('/ledger/bank/import', [
+  body('lines').isArray({ min: 1 }),
+  body('bank_name').optional().isString(),
+], validate, async (req, res) => {
+  try {
+    const lines = req.body.lines || [];
+    const bankName = req.body.bank_name || null;
+    const inserted = [];
+    const created = await supabase.from('bank_transactions').insert(
+      lines.map((l) => ({
+        statement_date: l.date || null,
+        description: l.description || null,
+        reference: l.reference || null,
+        amount: Number(l.amount) || 0,
+        bank_name: bankName || l.bank_name || null,
+        account_number: l.account_number || null,
+        imported_by: req.user.id,
+        status: 'unmatched',
+      }))
+    ).select('*');
+    if (created.error) throw created.error;
+    inserted.push(...created.data);
+
+    // Auto-match to ledger by reference+amount.
+    for (const line of created.data || []) {
+      if (!line.reference) continue;
+      const { data: led } = await supabase
+        .from('ledger_entries')
+        .select('id, amount, reference')
+        .or(`reference.eq.${line.reference},txn_no.eq.${line.reference}`)
+        .limit(10);
+      if (led && led.length) {
+        const candidate = led.find((e) => Math.abs(Number(e.amount) - Number(line.amount)) < 0.01) || led[0];
+        const matchOk = candidate && Math.abs(Number(candidate.amount) - Number(line.amount)) < 0.01;
+        await supabase.from('bank_reconciliation').insert({
+          bank_txn_id: line.id,
+          ledger_entry_id: candidate?.id || null,
+          reference: line.reference,
+          bank_amount: Number(line.amount),
+          ledger_amount: candidate?.amount != null ? Number(candidate.amount) : null,
+          match_status: matchOk ? 'matched' : 'amount_mismatch',
+          review_status: matchOk ? 'resolved' : 'pending',
+          note: matchOk ? 'Auto-matched by reference and amount' : 'Reference matched but amount differs — review',
+        });
+      } else {
+        await supabase.from('bank_reconciliation').insert({
+          bank_txn_id: line.id,
+          reference: line.reference,
+          bank_amount: Number(line.amount),
+          ledger_amount: null,
+          match_status: 'missing_reference',
+          review_status: 'pending',
+          note: 'No matching ledger entry found for this reference',
+        });
+      }
+    }
+
+    res.json({ success: true, imported: inserted.length, lines: inserted });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// List reconciliation items, optionally filtered by review_status / match_status.
+router.get('/ledger/bank/reconciliation', async (req, res) => {
+  try {
+    let q = supabase.from('bank_reconciliation').select('*, bank_txn:bank_transactions(*)');
+    if (req.query.review_status) q = q.eq('review_status', req.query.review_status);
+    if (req.query.match_status) q = q.eq('match_status', req.query.match_status);
+    if (req.query.pending === 'true') q = q.eq('review_status', 'pending');
+    const { data, error } = await q.order('created_at', { ascending: false }).limit(200);
+    if (error) throw error;
+    res.json({ success: true, items: data || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Resolve or escalate an item in the review queue.
+router.post('/ledger/bank/reconciliation/:id/review', [
+  param('id').isUUID(),
+  body('action').isIn(['resolved', 'escalated', 'pending']),
+  body('note').optional().isString(),
+], validate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const action = req.body.action;
+    const { data, error } = await supabase
+      .from('bank_reconciliation')
+      .update({ review_status: action, resolved_by: req.user.id, resolved_at: new Date().toISOString(), note: req.body.note || undefined })
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    res.json({ success: true, item: data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. SYSTEM-WIDE SEARCH
