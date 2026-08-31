@@ -483,8 +483,8 @@ router.get('/members/:id', async (req, res) => {
         nin: profile.nin || kycData?.nin || null,
         id_type: profile.id_type || kycData?.id_type || null,
         id_number: profile.id_number || kycData?.id_number || null,
-        selfie_url: profile.selfie_url || kycData?.selfie_url || kycData?.selfie || null,
-        id_document_url: profile.id_document_url || kycData?.id_document_url || null,
+        selfie_url: profile.selfie_url || kycData?.selfie_url || kycData?.selfie || kycData?.personal_info?.selfie_url || kycData?.personal_info?.selfie || null,
+        id_document_url: profile.id_document_url || kycData?.id_document_url || kycData?.personal_info?.id_document_url || null,
         kyc_status: profile.kyc_status || kycData?.status || null,
         // Employment / registration fields from KYC
         employer_name: profile.employer || profile.employer_name || kycData?.employer_name || null,
