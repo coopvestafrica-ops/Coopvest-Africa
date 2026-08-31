@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../config/theme_config.dart';
 import '../../../config/theme_extension.dart';
+import '../../../presentation/providers/auth_provider.dart';
 import '../../../presentation/providers/kyc_provider.dart';
 import '../../../presentation/widgets/common/buttons.dart';
 import '../../../presentation/widgets/common/cards.dart';
@@ -39,6 +40,25 @@ class _KYCBasicInfoScreenState extends ConsumerState<KYCBasicInfoScreen> {
     _emailController = TextEditingController();
     _phoneController = TextEditingController();
     _dobController = TextEditingController();
+    _prefillFromUser();
+  }
+
+  /// Pre-fill name/email/phone from the signed-in member's profile — these
+  /// were already captured during registration and must not be re-typed.
+  void _prefillFromUser() {
+    final user = ref.read(authProvider).user;
+    if (user == null) return;
+    final parts = user.name.trim().split(RegExp(r'\s+'));
+    if (parts.isNotEmpty && parts.first.isNotEmpty) {
+      _firstNameController.text = parts.first;
+      if (parts.length > 1) {
+        _lastNameController.text = parts.sublist(1).join(' ');
+      }
+    }
+    _emailController.text = user.email;
+    if (user.phone != null && user.phone!.isNotEmpty) {
+      _phoneController.text = user.phone!;
+    }
   }
 
   @override
@@ -82,7 +102,7 @@ class _KYCBasicInfoScreenState extends ConsumerState<KYCBasicInfoScreen> {
   }
 
   String _formatDate(DateTime date) {
-    return '${date.day}/${date.month}/${date.year}';
+    return date.toIso8601String().split('T')[0];
   }
 
   void _validateAndContinue() {

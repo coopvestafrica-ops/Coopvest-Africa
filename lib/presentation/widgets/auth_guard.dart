@@ -101,7 +101,8 @@ class _AuthGuardState extends ConsumerState<AuthGuard> {
     }
 
     // Once /kyc/status has resolved, decide from its returned submission.
-    if (kycState.status == KYCStatus.loaded) {
+    if (kycState.status == KYCStatus.loaded ||
+        kycState.status == KYCStatus.submitted) {
       if (!_hasSubmittedKyc(kycState)) {
         // Member hasn't submitted KYC yet — guide them through it.
         return const KYCEmploymentDetailsScreen(isFromRegistration: false);

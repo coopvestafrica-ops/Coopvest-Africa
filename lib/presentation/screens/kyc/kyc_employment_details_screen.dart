@@ -268,7 +268,7 @@ class _KYCEmploymentDetailsScreenState
 
     if (picked != null) {
       setState(() {
-        _dateOfBirthController.text = '${picked.day}/${picked.month}/${picked.year}';
+        _dateOfBirthController.text = picked.toIso8601String().split('T')[0];
       });
     }
   }

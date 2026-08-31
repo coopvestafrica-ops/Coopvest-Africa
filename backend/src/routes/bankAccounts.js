@@ -76,6 +76,63 @@ router.post(
 );
 
 /**
+ * POST /api/v1/bank-accounts/verify
+ *
+ * Resolves an account number + bank code to the real account holder name via
+ * Paystack's bank-resolve API. The mobile KYC bank-info screen calls this
+ * instead of trusting whatever the member typed, so disbursements don't go to
+ * misspelled or wrong accounts.
+ *
+ * Requires PAYSTACK_SECRET_KEY in the environment. When the key is not
+ * configured the endpoint returns 503 so the client can fall back to manual
+ * entry instead of showing a fake "Verified Account Name".
+ */
+router.post(
+  '/verify',
+  [
+    body('bank_code').isString().isLength({ min: 1, max: 10 }),
+    body('account_number').isString().isLength({ min: 10, max: 10 }),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { bank_code, account_number } = req.body;
+      const secretKey = process.env.PAYSTACK_SECRET_KEY;
+      if (!secretKey) {
+        logger.error('bank verify: PAYSTACK_SECRET_KEY not configured');
+        return res.status(503).json({
+          success: false,
+          error: 'Account verification is temporarily unavailable. Please try again later.',
+        });
+      }
+
+      const url = `https://api.paystack.co/bank/resolve?account_number=${encodeURIComponent(account_number)}&bank_code=${encodeURIComponent(bank_code)}`;
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${secretKey}` },
+      });
+      const payload = await response.json();
+
+      if (!response.ok || !payload.status || !payload.data?.account_name) {
+        return res.status(422).json({
+          success: false,
+          error: 'Could not verify this account. Check the bank and account number, then try again.',
+        });
+      }
+
+      return res.json({
+        success: true,
+        account_name: payload.data.account_name,
+        account_number: payload.data.account_number,
+        bank_code,
+      });
+    } catch (err) {
+      logger.error('bank account verify error:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+/**
  * PATCH /api/v1/bank-accounts/:id
  */
 router.patch('/:id', [param('id').isUUID()], validate, async (req, res) => {

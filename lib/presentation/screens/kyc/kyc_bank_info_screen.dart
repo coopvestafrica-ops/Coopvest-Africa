@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../config/theme_config.dart';
 import '../../../config/theme_extension.dart';
+import '../../../core/network/api_client.dart';
 import '../../../data/models/kyc_models.dart';
 import '../../../presentation/providers/auth_provider.dart';
 import '../../../presentation/providers/kyc_provider.dart';
@@ -95,16 +96,37 @@ class _KYCBankInfoScreenState extends ConsumerState<KYCBankInfoScreen> {
       return;
     }
 
+    final bankCode = _banks.firstWhere(
+      (b) => b['label'] == _selectedBank,
+      orElse: () => const {},
+    )['code'] as String?;
+    if (bankCode == null) {
+      _showError('Could not find the code for the selected bank');
+      return;
+    }
+
     setState(() {
       _isVerifyingAccountName = true;
     });
 
     try {
-      await Future.delayed(const Duration(seconds: 1));
+      // Resolve the account holder name server-side (Paystack bank-resolve).
+      final data = await ref.read(apiClientProvider).post(
+        '/bank-accounts/verify',
+        data: {
+          'bank_code': bankCode,
+          'account_number': _accountNumberController.text.trim(),
+        },
+      );
+      final accountName =
+          data is Map<String, dynamic> ? data['account_name'] as String? : null;
+      if (accountName == null || accountName.isEmpty) {
+        throw Exception('Verification returned no account name');
+      }
       setState(() {
         _isVerifyingAccountName = false;
         _accountNameVerified = true;
-        _accountNameController.text = 'Verified Account Name';
+        _accountNameController.text = accountName;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Account verified successfully'), backgroundColor: CoopvestColors.success),
@@ -112,6 +134,7 @@ class _KYCBankInfoScreenState extends ConsumerState<KYCBankInfoScreen> {
     } catch (e) {
       setState(() {
         _isVerifyingAccountName = false;
+        _accountNameVerified = false;
       });
       _showError('Verification failed: $e');
     }
