@@ -499,10 +499,19 @@ class _RegistrationOnboardingScreenState
       } catch (e) {
         logger.e('Registration data submission error: $e');
         if (mounted) {
-          final errorDetail = e
-              .toString()
-              .replaceFirst('Exception: ', '')
-              .replaceFirst('AuthException: ', '');
+          // AppException.toString() returns the bare server message; strip
+          // framework prefixes for anything else so the member always sees
+          // the server's reason (age gate, missing fields, etc.), never a
+          // raw exception dump or an uninterpolated placeholder.
+          String errorDetail = e is AppException
+              ? e.message
+              : e
+                  .toString()
+                  .replaceFirst('Exception: ', '')
+                  .replaceFirst('AuthException: ', '');
+          if (e is ServerException && e.statusCode == 422) {
+            errorDetail = 'The server rejected some details: $errorDetail';
+          }
           await _showRetryDialog(
             'Could not save your registration details: $errorDetail. '
             'Please check your connection and try again.',
