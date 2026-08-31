@@ -497,11 +497,14 @@ class _RegistrationOnboardingScreenState
       try {
         await apiClient.post('/auth/complete-registration', data: combined);
       } catch (e) {
-        logger.e('Registration data submission error: \$e');
+        logger.e('Registration data submission error: $e');
         if (mounted) {
-          final errorDetail = e.toString().replaceFirst('Exception: ', '').replaceFirst('AuthException: ', '');
+          final errorDetail = e
+              .toString()
+              .replaceFirst('Exception: ', '')
+              .replaceFirst('AuthException: ', '');
           await _showRetryDialog(
-            'Could not save your registration details: \$errorDetail. '
+            'Could not save your registration details: $errorDetail. '
             'Please check your connection and try again.',
           );
         }
@@ -985,11 +988,16 @@ class _PersonalInfoStepState extends State<_PersonalInfoStep> {
             readOnly: true,
             controller: _dobCtrl,
             onTap: () async {
+              final now = DateTime.now();
+              // Exact 18th birthday (calendar-aware, leap years included) —
+              // anyone younger than 18 cannot register on Coopvest.
+              final latestAllowed = DateTime(now.year - 18, now.month, now.day);
               final picked = await showDatePicker(
                 context: context,
                 initialDate: DateTime(1990),
                 firstDate: DateTime(1940),
-                lastDate: DateTime.now().subtract(const Duration(days: 365 * 18)),
+                lastDate: latestAllowed,
+                helpText: 'DATE OF BIRTH (18+ ONLY)',
                 builder: (context, child) => Theme(
                   data: Theme.of(context).copyWith(
                     colorScheme: const ColorScheme.light(

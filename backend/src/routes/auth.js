@@ -12,6 +12,13 @@ const { body, validationResult } = require('express-validator');
 const supabase = require('../config/supabase');
 const { authenticate, decodeSessionId } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const {
+  hasValue,
+  buildRegistrationCandidates,
+  mergeStoredPersonalInfo,
+  ageInYears,
+  MIN_AGE_YEARS,
+} = require('../services/registrationMerge');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -326,10 +333,6 @@ const REGISTRATION_FIELDS = {
   },
 };
 
-function hasValue(v) {
-  return v !== null && v !== undefined && String(v).trim() !== '';
-}
-
 function checkCompletion(personal_info, employment_info) {
   const p = personal_info || {};
   const e = employment_info || {};
@@ -377,14 +380,16 @@ router.get('/complete-registration/status', authenticate, async (req, res) => {
   try {
     const { data: kycRow, error } = await supabase
       .from('kyc')
-      .select('national_id, personal_info, employment_info')
+      .select('national_id, date_of_birth, address, personal_info, employment_info')
       .eq('profile_id', req.user.id)
       .maybeSingle();
 
     if (error) throw error;
 
+    // date_of_birth lives both in its own column and (historically) inside
+    // personal_info; merge it so a completed DOB is never reported missing.
     const { isComplete, completionPercentage, missingRequiredFields } = kycRow
-      ? checkCompletion(kycRow.personal_info, kycRow.employment_info)
+      ? checkCompletion(mergeStoredPersonalInfo(kycRow), kycRow.employment_info)
       : { isComplete: false, completionPercentage: 0, missingRequiredFields: [] };
 
     return res.json({
@@ -423,16 +428,30 @@ router.post('/complete-registration', authenticate, async (req, res) => {
       partial,
     } = req.body;
 
-    // Build the same shape checkCompletion() expects so we can validate inline.
-    const personal_info_candidate = {
-      gender, date_of_birth, address, state, lga, staff_id, id_type,
-      nok_name, nok_relationship, nok_phone, nok_address,
-      monthly_amount, contribution_method, preferred_payment_day,
-    };
-    const employment_info_candidate = {
-      occupation, employer_name, employment_type,
-      employer_staff_id, work_address, years_of_employment,
-    };
+    // Fetch the existing KYC row once. The body is merged over it for both
+    // validation and the write, so a member resuming an earlier save never
+    // has already-completed fields reported missing nor wiped by the upsert.
+    const { data: existingKyc } = await supabase
+      .from('kyc')
+      .select('national_id, date_of_birth, address, personal_info, employment_info')
+      .eq('profile_id', req.user.id)
+      .maybeSingle();
+
+    const { personal_info: personal_info_candidate, employment_info: employment_info_candidate } =
+      buildRegistrationCandidates(req.body, existingKyc);
+
+    // Age gate: Coopvest membership is adults only. Runs on every save
+    // (partial included) and uses the merged DOB so a resume is checked too.
+    // An unparseable or missing DOB is left to the completeness check below.
+    if (hasValue(personal_info_candidate.date_of_birth)) {
+      const age = ageInYears(personal_info_candidate.date_of_birth);
+      if (age !== null && age < MIN_AGE_YEARS) {
+        return res.status(422).json({
+          success: false,
+          message: `You must be at least ${MIN_AGE_YEARS} years old to register on Coopvest.`,
+        });
+      }
+    }
 
     if (!partial) {
       const { isComplete, missingRequiredFields } = checkCompletion(
@@ -471,43 +490,50 @@ router.post('/complete-registration', authenticate, async (req, res) => {
       return res.status(500).json({ success: false, error: profileError.message });
     }
 
-    // 2. Upsert KYC row — merges personal, employment, NOK, and contribution data.
-    //    personal_info holds everything that doesn't have its own top-level column.
+    // 2. Upsert KYC row — merged over the existing row so a partial resubmit
+    //    never wipes fields the member already completed. personal_info holds
+    //    everything that doesn't have its own top-level column; bank fields
+    //    merge from the existing row when absent from the body.
+    const existingPersonal = existingKyc?.personal_info || {};
+    const bankFields = {
+      bank_name, bank_code, account_number, account_name, account_type,
+    };
+    const mergedBank = Object.fromEntries(
+      Object.entries(bankFields).map(([k, v]) => [k, hasValue(v) ? v : existingPersonal[k]])
+    );
+
     const { error: kycError } = await supabase
       .from('kyc')
       .upsert(
         {
           profile_id: req.user.id,
-          national_id: id_number || null,
-          date_of_birth: date_of_birth || null,
-          address: address || null,
+          national_id: hasValue(id_number) ? id_number : (existingKyc?.national_id || null),
+          date_of_birth: personal_info_candidate.date_of_birth || null,
+          address: hasValue(address) ? address : (existingKyc?.address || null),
           personal_info: {
-            gender,
-            state,
-            lga,
-            staff_id,
-            id_type,
-            nok_name,
-            nok_relationship,
-            nok_phone,
-            nok_address,
-            monthly_amount,
-            contribution_method,
-            preferred_payment_day,
-            // Bank info
-            bank_name,
-            bank_code,
-            account_number,
-            account_name,
-            account_type,
+            ...existingPersonal,
+            gender: personal_info_candidate.gender,
+            state: personal_info_candidate.state,
+            lga: personal_info_candidate.lga,
+            staff_id: personal_info_candidate.staff_id,
+            id_type: personal_info_candidate.id_type,
+            nok_name: personal_info_candidate.nok_name,
+            nok_relationship: personal_info_candidate.nok_relationship,
+            nok_phone: personal_info_candidate.nok_phone,
+            nok_address: personal_info_candidate.nok_address,
+            monthly_amount: personal_info_candidate.monthly_amount,
+            contribution_method: personal_info_candidate.contribution_method,
+            preferred_payment_day: personal_info_candidate.preferred_payment_day,
+            ...mergedBank,
           },
           employment_info: {
-            occupation,
-            employer_name,
-            employment_type,
-            employer_staff_id,
-            work_address,
-            years_of_employment,
+            ...(existingKyc?.employment_info || {}),
+            occupation: employment_info_candidate.occupation,
+            employer_name: employment_info_candidate.employer_name,
+            employment_type: employment_info_candidate.employment_type,
+            employer_staff_id: employment_info_candidate.employer_staff_id,
+            work_address: employment_info_candidate.work_address,
+            years_of_employment: employment_info_candidate.years_of_employment,
           },
           updated_at: new Date().toISOString(),
         },
@@ -552,14 +578,14 @@ router.get('/profile-completeness', authenticate, async (req, res) => {
   try {
     const { data: kycRow, error } = await supabase
       .from('kyc')
-      .select('personal_info, employment_info')
+      .select('date_of_birth, address, personal_info, employment_info')
       .eq('profile_id', req.user.id)
       .maybeSingle();
 
     if (error) throw error;
 
     const result = checkCompletion(
-      kycRow?.personal_info || {},
+      mergeStoredPersonalInfo(kycRow),
       kycRow?.employment_info || {}
     );
 

@@ -15,6 +15,7 @@ const supabase = require('../config/supabase');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
+const { ageInYears, MIN_AGE_YEARS } = require('../services/registrationMerge');
 
 // In-memory file upload (10 MB max) — the file is streamed straight into
 // Supabase Storage, never touching the disk.
@@ -86,6 +87,20 @@ router.post(
         ...(kyc.bank_info || {}),
         ...(bankInfo || {}),
       };
+
+      // Adults only: reject KYC submissions whose date of birth is under 18.
+      // Checked against the merged record so previously saved DOBs are gated
+      // too, not just the one in this request.
+      const dob = mergedPersonal.date_of_birth || kyc.date_of_birth;
+      if (dob) {
+        const age = ageInYears(dob);
+        if (age !== null && age < MIN_AGE_YEARS) {
+          return res.status(422).json({
+            success: false,
+            message: `You must be at least ${MIN_AGE_YEARS} years old to register on Coopvest.`,
+          });
+        }
+      }
 
       const { data, error } = await supabase
         .from('kyc')
