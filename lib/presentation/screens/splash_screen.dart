@@ -25,7 +25,7 @@ class _SplashScreenState extends State<SplashScreen> {
   bool _soundPlayed = false;
   int _elapsedSeconds = 0;
   
-  static const int splashDurationSeconds = 30;
+  static const int splashDurationSeconds = 6;
 
   @override
   void initState() {
@@ -187,6 +187,48 @@ class _SplashScreenState extends State<SplashScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Branded fallback shown while the logo asset decodes or if it fails to load.
+/// A gradient medallion with a savings glyph and the "CV" monogram — far more
+/// polished than a bare white tile, so the splash never looks like "just a
+/// green screen" even before the image is ready.
+class _LogoFallback extends StatelessWidget {
+  const _LogoFallback();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            CoopvestColors.primary,
+            CoopvestColors.primaryDark,
+          ],
+        ),
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          const Icon(Icons.savings_outlined, color: Colors.white, size: 54),
+          Positioned(
+            bottom: 26,
+            child: Text(
+              'CV',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.9),
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 2,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -47,6 +47,33 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
     });
   }
 
+  final List<Map<String, dynamic>> _depositTypes = [
+    {
+      'value': 'monthly_contribution',
+      'label': 'Monthly Contribution',
+      'icon': Icons.savings_outlined,
+      'description': 'Regular monthly savings contribution',
+    },
+    {
+      'value': 'loan_repayment',
+      'label': 'Loan Repayment',
+      'icon': Icons.payments_outlined,
+      'description': 'Repay an active loan',
+    },
+    {
+      'value': 'overdue_payment',
+      'label': 'Overdue Payment',
+      'icon': Icons.schedule_outlined,
+      'description': 'Settle an overdue contribution',
+    },
+    {
+      'value': 'fine',
+      'label': 'Fine',
+      'icon': Icons.gavel_outlined,
+      'description': 'Pay an imposed fine or penalty',
+    },
+  ];
+
   final List<Map<String, dynamic>> _paymentMethods = [
     {'value': 'bank_transfer', 'label': 'Bank Transfer', 'icon': Icons.account_balance},
     {'value': 'card', 'label': 'Debit Card', 'icon': Icons.credit_card},

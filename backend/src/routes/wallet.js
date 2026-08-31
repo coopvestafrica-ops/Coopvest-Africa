@@ -440,6 +440,7 @@ router.post(
             sender_account_name: sender_account_name || null,
             sender_account_number: sender_account_number || null,
             payment_proof_url: proof_url || null,
+            payment_type: payment_type || 'monthly_contribution',
           })
           .select('*')
           .single();
@@ -792,8 +793,22 @@ router.post('/upload-proof', authenticate, upload.single('proof'), async (req, r
       .from('deposit-proofs')
       .getPublicUrl(storagePath);
 
+    // Also generate a signed URL so proofs are viewable even when the storage
+    // bucket is private. Signed URLs are valid for 10 years (effectively permanent).
+    let proofUrl = publicUrl;
+    try {
+      const { data: signed, error: signedErr } = await supabase.storage
+        .from('deposit-proofs')
+        .createSignedUrl(storagePath, 60 * 60 * 24 * 365 * 10);
+      if (!signedErr && signed && signed.signedUrl) {
+        proofUrl = signed.signedUrl;
+      }
+    } catch (signedErr) {
+      logger.warn('signed URL generation failed, falling back to public URL:', signedErr.message);
+    }
+
     logger.info(`Deposit proof uploaded for user ${req.user.id}: ${storagePath}`);
-    res.json({ success: true, url: publicUrl });
+    res.json({ success: true, url: proofUrl, publicUrl });
   } catch (err) {
     logger.error('upload-proof error:', err);
     res.status(500).json({ success: false, message: err.message || 'Upload failed.' });

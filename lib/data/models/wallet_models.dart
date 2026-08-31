@@ -427,6 +427,7 @@ class DepositRequest extends Equatable {
   final String currency;
   final String status; // pending | verified | rejected | cancelled
   final String? paymentMethod;
+  final String? paymentType;
   final String? paymentProofUrl;
   final String? paymentReference;
   final String? paymentDate;
@@ -446,6 +447,7 @@ class DepositRequest extends Equatable {
     required this.currency,
     required this.status,
     this.paymentMethod,
+    this.paymentType,
     this.paymentProofUrl,
     this.paymentReference,
     this.paymentDate,
@@ -475,6 +477,7 @@ class DepositRequest extends Equatable {
       currency: json['currency']?.toString() ?? 'NGN',
       status: json['status']?.toString() ?? 'pending',
       paymentMethod: json['payment_method']?.toString(),
+      paymentType: json['payment_type']?.toString(),
       paymentProofUrl: json['payment_proof_url']?.toString(),
       paymentReference: json['payment_reference']?.toString(),
       paymentDate: json['payment_date']?.toString(),
@@ -495,6 +498,6 @@ class DepositRequest extends Equatable {
 
   @override
   List<Object?> get props => [id, profileId, amount, currency, status,
-    paymentMethod, paymentProofUrl, paymentReference, adminNotes,
+    paymentMethod, paymentType, paymentProofUrl, paymentReference, adminNotes,
     verifiedBy, verifiedAt, createdAt, updatedAt];
 }

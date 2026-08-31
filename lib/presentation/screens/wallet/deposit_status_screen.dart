@@ -166,6 +166,20 @@ class _DepositStatusScreenState extends ConsumerState<DepositStatusScreen> {
     );
   }
 
+  String _paymentTypeLabel(String? paymentType) {
+    switch (paymentType) {
+      case 'loan_repayment':
+        return 'Loan Repayment';
+      case 'overdue_payment':
+        return 'Overdue Payment';
+      case 'fine':
+        return 'Fine';
+      case 'monthly_contribution':
+      default:
+        return 'Monthly Contribution';
+    }
+  }
+
   Widget _buildCardHeader(BuildContext context, DepositRequest req) {
     final statusColor = _statusColor(req.status);
     final statusIcon  = _statusIcon(req.status);
@@ -194,6 +208,15 @@ class _DepositStatusScreenState extends ConsumerState<DepositStatusScreen> {
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                     color: context.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _paymentTypeLabel(req.paymentType),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: CoopvestColors.primary,
                   ),
                 ),
                 const SizedBox(height: 2),
