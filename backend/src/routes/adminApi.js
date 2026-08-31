@@ -4520,7 +4520,7 @@ router.post(
         .select('*')
         .single();
       if (error) throw error;
-      await auditLog(req.user.id, 'FEE_TYPE_CREATED', data.id, { name, category, amount });
+      await logAdminAction('FEE_TYPE_CREATED', { model: 'fee_types', id: data.id }, { name, category, amount }, req);
       res.status(201).json({ success: true, fee_type: data });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -4556,7 +4556,7 @@ router.patch(
         .select('*')
         .single();
       if (error) throw error;
-      await auditLog(req.user.id, 'FEE_TYPE_UPDATED', req.params.id, updates);
+      await logAdminAction('FEE_TYPE_UPDATED', { model: 'fee_types', id: req.params.id }, updates, req);
       res.json({ success: true, fee_type: data });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -4594,11 +4594,11 @@ router.post(
         .select('*')
         .single();
       if (insErr) throw insErr;
-      await auditLog(req.user.id, 'FEE_ASSIGNED', fee.id, {
+      await logAdminAction('FEE_ASSIGNED', { model: 'member_fees', id: fee.id }, {
         profile_id: req.body.profile_id,
         fee_type: ft.name,
         amount,
-      });
+      }, req);
       res.status(201).json({ success: true, member_fee: fee });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -4640,8 +4640,572 @@ router.patch('/member-fees/:id', async (req, res) => {
       .select('*')
       .single();
     if (error) throw error;
-    await auditLog(req.user.id, 'MEMBER_FEE_UPDATED', req.params.id, { status });
+    await logAdminAction('MEMBER_FEE_UPDATED', { model: 'member_fees', id: req.params.id }, { status }, req);
     res.json({ success: true, member_fee: data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Utility endpoints used by the Admin Dashboard frontend
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/v1/admin/logout-events
+ * Record a logout event for the current admin (used by the dashboard header).
+ */
+router.post('/logout-events', [
+  body('profileId').isUUID().withMessage('profileId must be a valid UUID'),
+], validate, async (req, res) => {
+  try {
+    const { profileId } = req.body;
+    await logAdminAction('LOGOUT', { model: 'Profile', id: profileId }, { page: 'admin-dashboard' }, req);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/v1/admin/activity
+ * Generic activity tracking endpoint for the admin dashboard.
+ */
+router.post('/activity', [
+  body('page').isString().notEmpty(),
+  body('module').isString().notEmpty(),
+  body('action').isString().notEmpty(),
+], validate, async (req, res) => {
+  try {
+    const { page, module, action } = req.body;
+    await logAdminAction(`PAGE_${action.toUpperCase()}`, null, { page, module }, req);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/wallets
+ * Returns all member wallets with member profile data.
+ */
+router.get('/wallets', async (req, res) => {
+  try {
+    const { page, limit, from, to } = paging(req);
+    const { status, search } = req.query;
+
+    let q = supabase
+      .from('wallets')
+      .select('*, profile:profiles(id, user_id, name, email)', { count: 'exact' })
+      .order('updated_at', { ascending: false })
+      .range(from, to);
+
+    if (status === 'active') q = q.eq('is_active', true);
+    if (status === 'frozen') q = q.eq('is_frozen', true);
+    if (status === 'suspended') q = q.eq('is_suspended', true);
+    if (search) {
+      // Search by member name or email via the profiles relation
+      q = q.or(`profiles.name.ilike.%${search}%,profiles.email.ilike.%${search}%`);
+    }
+
+    const { data, error, count } = await q;
+    if (error) throw error;
+
+    const wallets = (data || []).map(w => ({
+      id: w.id,
+      userId: w.profile_id,
+      userName: w.profile?.name || w.profile?.email || 'Unknown',
+      userEmail: w.profile?.email || '',
+      balance: w.balance || 0,
+      status: w.is_frozen ? 'frozen' : w.is_suspended ? 'suspended' : 'active',
+      lastTransactionAt: w.last_transaction_at || w.updated_at,
+      lastTransactionAmount: w.last_transaction_amount || 0,
+    }));
+
+    // Summary stats across all wallets
+    const { data: allWallets } = await supabase
+      .from('wallets')
+      .select('balance, is_active, is_frozen, is_suspended');
+
+    const totalBalance = (allWallets || []).reduce((s, w) => s + (w.balance || 0), 0);
+    const frozenCount = (allWallets || []).filter(w => w.is_frozen || w.is_suspended).length;
+
+    res.json({
+      success: true,
+      data: wallets,
+      total: count || 0,
+      totalBalance,
+      frozenCount,
+      pendingTransfers: 0,
+      todayVolume: 0,
+      pagination: { page, limit, total: count || 0 },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/v1/admin/wallets/:id/status
+ * Update wallet status (active, frozen, suspended).
+ */
+router.patch('/wallets/:id/status', [
+  body('status').isIn(['active', 'frozen', 'suspended']).withMessage('status must be active|frozen|suspended'),
+], validate, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const updates = {
+      is_active: status === 'active',
+      is_frozen: status === 'frozen',
+      is_suspended: status === 'suspended',
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await supabase
+      .from('wallets')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    await logAdminAction('WALLET_STATUS_UPDATED', { model: 'wallets', id: req.params.id }, { status }, req);
+    res.json({ success: true, wallet: data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/v1/admin/wallets/:id/adjust
+ * Manually adjust a member's wallet balance.
+ */
+router.post('/wallets/:id/adjust', [
+  body('amount').isNumeric().withMessage('amount must be numeric'),
+  body('note').isString().notEmpty().withMessage('note is required'),
+], validate, async (req, res) => {
+  try {
+    const { amount, note } = req.body;
+    const { data: wallet, error: walletErr } = await supabase
+      .from('wallets')
+      .select('balance, profile_id')
+      .eq('id', req.params.id)
+      .single();
+    if (walletErr || !wallet) throw new Error('Wallet not found');
+
+    const newBalance = Number(wallet.balance) + Number(amount);
+    const { data, error } = await supabase
+      .from('wallets')
+      .update({ balance: newBalance, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+
+    await logAdminAction('WALLET_BALANCE_ADJUSTED', { model: 'wallets', id: req.params.id }, {
+      amount, note, previousBalance: wallet.balance, newBalance,
+    }, req);
+    res.json({ success: true, wallet: data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/excel-uploads
+ * Returns recent bulk-upload / import history.
+ */
+router.get('/excel-uploads', async (req, res) => {
+  try {
+    const { page, limit, from, to } = paging(req);
+    const { data, error, count } = await supabase
+      .from('bulk_imports')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    if (error) throw error;
+    res.json({ success: true, uploads: data || [], pagination: { page, limit, total: count || 0 } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/v1/admin/excel-uploads
+ * Registers a new bulk-upload record after the file is stored client-side.
+ */
+router.post('/excel-uploads', [
+  body('filename').isString().notEmpty(),
+  body('type').isString().notEmpty(),
+  body('record_count').isNumeric().optional(),
+  body('status').isIn(['pending','reviewing','processed','failed']).optional(),
+], validate, async (req, res) => {
+  try {
+    const { filename, type, record_count = 0, status = 'reviewing' } = req.body;
+    const { data, error } = await supabase
+      .from('bulk_imports')
+      .insert({
+        filename,
+        type,
+        uploaded_by: req.user?.id || null,
+        record_count: Number(record_count),
+        status,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    await logAdminAction('BULK_IMPORT_UPLOADED', { model: 'bulk_imports', id: data.id }, { filename, type }, req);
+    res.json({ success: true, id: data.id, filename: data.filename, type: data.type, status: data.status, record_count: data.record_count, uploadedAt: data.created_at });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/v1/admin/excel-uploads/:id
+ * Update the status of a bulk-upload record (e.g. mark processed/failed).
+ */
+router.patch('/excel-uploads/:id', [
+  body('status').isIn(['pending','reviewing','processed','failed']).withMessage('Invalid status'),
+], validate, async (req, res) => {
+  try {
+    const { status, error_count = 0 } = req.body;
+    const { data, error } = await supabase
+      .from('bulk_imports')
+      .update({ status, error_count: Number(error_count), updated_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, upload: data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Enterprise Accounting — chart of accounts, journal entries, trial balance,
+// P&L, balance sheet, and general-ledger report
+// ---------------------------------------------------------------------------
+
+// Standard cooperative chart of accounts used as fallback when no custom
+// accounts exist. account_code is the stable key; account_type drives the
+// trial-balance and P&L classification.
+const DEFAULT_CHART_OF_ACCOUNTS = [
+  { code: '1000', name: 'Cash & Bank', type: 'asset', normal: 'debit' },
+  { code: '1010', name: 'Member Savings', type: 'asset', normal: 'debit' },
+  { code: '1020', name: 'Loans Receivable', type: 'asset', normal: 'debit' },
+  { code: '1030', name: 'Interest Receivable', type: 'asset', normal: 'debit' },
+  { code: '2000', name: 'Member Deposits Payable', type: 'liability', normal: 'credit' },
+  { code: '2010', name: 'Withdrawals Payable', type: 'liability', normal: 'credit' },
+  { code: '2020', name: 'Guarantor Obligations', type: 'liability', normal: 'credit' },
+  { code: '3000', name: 'Share Capital', type: 'equity', normal: 'credit' },
+  { code: '3010', name: 'Retained Earnings', type: 'equity', normal: 'credit' },
+  { code: '4000', name: 'Interest Income', type: 'revenue', normal: 'credit' },
+  { code: '4010', name: 'Fee Income', type: 'revenue', normal: 'credit' },
+  { code: '4020', name: 'Penalty Income', type: 'revenue', normal: 'credit' },
+  { code: '5000', name: 'Loan Loss Provision', type: 'expense', normal: 'debit' },
+  { code: '5010', name: 'Operating Expenses', type: 'expense', normal: 'debit' },
+  { code: '5020', name: 'Interest Expense', type: 'expense', normal: 'debit' },
+];
+
+/**
+ * GET /api/v1/admin/accounting/chart-of-accounts
+ * Returns the chart of accounts (custom + default).
+ */
+router.get('/accounting/chart-of-accounts', async (_req, res) => {
+  try {
+    // Try to load custom accounts from the settings table.
+    let customAccounts = [];
+    try {
+      const { data } = await supabase
+        .from('settings')
+        .select('value')
+        .eq('key', 'chart_of_accounts')
+        .maybeSingle();
+      if (data?.value?.accounts) customAccounts = data.value.accounts;
+    } catch (_) { /* settings table may not exist yet */ }
+
+    res.json({
+      success: true,
+      accounts: [...DEFAULT_CHART_OF_ACCOUNTS, ...customAccounts],
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/accounting/trial-balance
+ * Computes a trial balance from ledger_entries.
+ * Groups entries by account_code and sums debit/credit.
+ */
+router.get('/accounting/trial-balance', async (req, res) => {
+  try {
+    const { from: fromDate, to: toDate } = req.query;
+
+    let q = supabase
+      .from('ledger_entries')
+      .select('account_code, account_name, debit, credit, txn_date');
+    if (fromDate) q = q.gte('txn_date', fromDate);
+    if (toDate) q = q.lte('txn_date', toDate);
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    const byAccount = {};
+    for (const e of (data || [])) {
+      const code = e.account_code || '0000';
+      const name = e.account_name || 'Unclassified';
+      if (!byAccount[code]) {
+        byAccount[code] = { account_code: code, account_name: name, debit: 0, credit: 0 };
+      }
+      byAccount[code].debit += Number(e.debit || 0);
+      byAccount[code].credit += Number(e.credit || 0);
+    }
+
+    // Merge with default chart so accounts with no entries still show.
+    for (const acct of DEFAULT_CHART_OF_ACCOUNTS) {
+      if (!byAccount[acct.code]) {
+        byAccount[acct.code] = {
+          account_code: acct.code,
+          account_name: acct.name,
+          account_type: acct.type,
+          debit: 0,
+          credit: 0,
+        };
+      } else {
+        byAccount[acct.code].account_type = acct.type;
+      }
+    }
+
+    const rows = Object.values(byAccount).sort((a, b) => a.account_code.localeCompare(b.account_code));
+    const totalDebit = rows.reduce((s, r) => s + r.debit, 0);
+    const totalCredit = rows.reduce((s, r) => s + r.credit, 0);
+
+    res.json({
+      success: true,
+      trial_balance: rows,
+      totals: { debit: totalDebit, credit: totalCredit, balanced: Math.abs(totalDebit - totalCredit) < 0.01 },
+      period: { from: fromDate || null, to: toDate || null },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/accounting/profit-loss
+ * Computes P&L from ledger entries in a date range.
+ */
+router.get('/accounting/profit-loss', async (req, res) => {
+  try {
+    const { from: fromDate, to: toDate } = req.query;
+
+    let q = supabase
+      .from('ledger_entries')
+      .select('account_code, account_name, debit, credit, txn_date');
+    if (fromDate) q = q.gte('txn_date', fromDate);
+    if (toDate) q = q.lte('txn_date', toDate);
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    // Classify entries using the default chart + any known revenue/expense codes.
+    const revenue = [];
+    const expenses = [];
+    const byAccount = {};
+
+    for (const e of (data || [])) {
+      const code = e.account_code || '0000';
+      if (!byAccount[code]) {
+        byAccount[code] = { account_code: code, account_name: e.account_name || 'Unclassified', debit: 0, credit: 0 };
+      }
+      byAccount[code].debit += Number(e.debit || 0);
+      byAccount[code].credit += Number(e.credit || 0);
+    }
+
+    for (const acct of DEFAULT_CHART_OF_ACCOUNTS) {
+      const entry = byAccount[acct.code];
+      if (!entry) continue;
+      if (acct.type === 'revenue') {
+        revenue.push({ ...entry, net: entry.credit - entry.debit });
+      } else if (acct.type === 'expense') {
+        expenses.push({ ...entry, net: entry.debit - entry.credit });
+      }
+    }
+
+    const totalRevenue = revenue.reduce((s, r) => s + r.net, 0);
+    const totalExpenses = expenses.reduce((s, r) => s + r.net, 0);
+    const netIncome = totalRevenue - totalExpenses;
+
+    res.json({
+      success: true,
+      profit_loss: {
+        revenue,
+        expenses,
+        total_revenue: totalRevenue,
+        total_expenses: totalExpenses,
+        net_income: netIncome,
+      },
+      period: { from: fromDate || null, to: toDate || null },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/accounting/balance-sheet
+ * Computes a balance sheet from ledger entries as at a date.
+ */
+router.get('/accounting/balance-sheet', async (req, res) => {
+  try {
+    const { as_at: asAt } = req.query;
+
+    let q = supabase
+      .from('ledger_entries')
+      .select('account_code, account_name, debit, credit, txn_date');
+    if (asAt) q = q.lte('txn_date', asAt);
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    const byAccount = {};
+    for (const e of (data || [])) {
+      const code = e.account_code || '0000';
+      if (!byAccount[code]) {
+        byAccount[code] = { account_code: code, account_name: e.account_name || 'Unclassified', debit: 0, credit: 0 };
+      }
+      byAccount[code].debit += Number(e.debit || 0);
+      byAccount[code].credit += Number(e.credit || 0);
+    }
+
+    const assets = [];
+    const liabilities = [];
+    const equity = [];
+
+    for (const acct of DEFAULT_CHART_OF_ACCOUNTS) {
+      const entry = byAccount[acct.code];
+      if (!entry) continue;
+      const net = acct.normal === 'debit' ? entry.debit - entry.credit : entry.credit - entry.debit;
+      if (acct.type === 'asset') assets.push({ ...entry, net });
+      else if (acct.type === 'liability') liabilities.push({ ...entry, net });
+      else if (acct.type === 'equity') equity.push({ ...entry, net });
+    }
+
+    const totalAssets = assets.reduce((s, r) => s + r.net, 0);
+    const totalLiabilities = liabilities.reduce((s, r) => s + r.net, 0);
+    const totalEquity = equity.reduce((s, r) => s + r.net, 0);
+
+    res.json({
+      success: true,
+      balance_sheet: {
+        assets,
+        liabilities,
+        equity,
+        total_assets: totalAssets,
+        total_liabilities: totalLiabilities,
+        total_equity: totalEquity,
+        balanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
+      },
+      as_at: asAt || new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/v1/admin/accounting/journal-entry
+ * Creates a double-entry journal entry (one debit + one credit line).
+ * Both lines are inserted as ledger_entries rows with the same txn_no group.
+ */
+router.post('/accounting/journal-entry', [
+  body('txn_date').isISO8601().withMessage('txn_date must be ISO8601'),
+  body('description').isString().notEmpty(),
+  body('lines').isArray({ min: 2 }).withMessage('At least 2 lines required'),
+  body('lines.*.account_code').isString().notEmpty(),
+  body('lines.*.debit').isNumeric().optional(),
+  body('lines.*.credit').isNumeric().optional(),
+], validate, async (req, res) => {
+  try {
+    const { txn_date, description, lines } = req.body;
+
+    // Validate double-entry: total debits must equal total credits.
+    const totalDebit = lines.reduce((s, l) => s + Number(l.debit || 0), 0);
+    const totalCredit = lines.reduce((s, l) => s + Number(l.credit || 0), 0);
+    if (Math.abs(totalDebit - totalCredit) > 0.01) {
+      return res.status(400).json({
+        success: false,
+        error: `Journal entry is unbalanced: debits=${totalDebit}, credits=${totalCredit}`,
+      });
+    }
+
+    // Generate a shared transaction number.
+    const txnNo = `JE-${Date.now()}`;
+    const rows = lines.map((line, i) => ({
+      txn_no: `${txnNo}-${i + 1}`,
+      txn_date,
+      description: `${description} [${line.account_code}]`,
+      account_code: line.account_code,
+      account_name: line.account_name || '',
+      debit: Number(line.debit || 0),
+      credit: Number(line.credit || 0),
+      category: Number(line.debit || 0) > 0 ? 'debit' : 'credit',
+      amount: Number(line.debit || 0) > 0 ? Number(line.debit) : Number(line.credit),
+      initiated_by: req.user?.id || null,
+      approved_by: req.user?.id || null,
+      status: 'posted',
+    }));
+
+    const { data, error } = await supabase
+      .from('ledger_entries')
+      .insert(rows)
+      .select();
+    if (error) throw error;
+
+    await logAdminAction('JOURNAL_ENTRY_POSTED', { model: 'ledger_entries', id: txnNo }, { txn_date, description, lines }, req);
+    res.json({ success: true, journal_entry: data, txn_no: txnNo });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/v1/admin/accounting/general-ledger
+ * Returns all ledger entries grouped by account with running balances.
+ */
+router.get('/accounting/general-ledger', async (req, res) => {
+  try {
+    const { account_code, from: fromDate, to: toDate } = req.query;
+
+    let q = supabase
+      .from('ledger_entries')
+      .select('*')
+      .order('txn_date', { ascending: true });
+    if (account_code) q = q.eq('account_code', account_code);
+    if (fromDate) q = q.gte('txn_date', fromDate);
+    if (toDate) q = q.lte('txn_date', toDate);
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    // Group by account and compute running balance.
+    const byAccount = {};
+    for (const e of (data || [])) {
+      const code = e.account_code || '0000';
+      if (!byAccount[code]) {
+        byAccount[code] = { account_code: code, account_name: e.account_name || 'Unclassified', entries: [], balance: 0 };
+      }
+      const debit = Number(e.debit || 0);
+      const credit = Number(e.credit || 0);
+      byAccount[code].balance += debit - credit;
+      byAccount[code].entries.push({ ...e, running_balance: byAccount[code].balance });
+    }
+
+    res.json({
+      success: true,
+      general_ledger: Object.values(byAccount).sort((a, b) => a.account_code.localeCompare(b.account_code)),
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

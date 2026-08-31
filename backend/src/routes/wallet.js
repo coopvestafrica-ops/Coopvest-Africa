@@ -738,6 +738,14 @@ router.get('/payment-settings', authenticate, async (req, res) => {
       .eq('key', 'payment_account')
       .maybeSingle();
 
+    if (error && error.message?.includes('does not exist')) {
+      return res.json({
+        success: true,
+        bank: process.env.DEFAULT_PAYMENT_BANK || 'Opay',
+        account_name: process.env.DEFAULT_PAYMENT_ACCOUNT_NAME || 'Coopvest Africa',
+        account_number: process.env.DEFAULT_PAYMENT_ACCOUNT_NUMBER || '',
+      });
+    }
     if (error) throw error;
 
     if (data?.value) {
