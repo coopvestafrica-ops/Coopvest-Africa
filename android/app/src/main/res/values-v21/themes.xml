@@ -5,7 +5,7 @@
         <item name="android:windowFullscreen">true</item>
     </style>
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
-        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:windowBackground">@color/splash_background</item>
         <item name="android:windowAnimationStyle">@style/FadeWindowAnimation</item>
     </style>
     <style name="FadeWindowAnimation" parent="@android:style/Animation.Activity">

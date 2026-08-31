@@ -418,6 +418,141 @@ router.post(
       // 2. Update savings balance
       // 3. Create transaction record
       // 4. Create digital receipt
+      //
+      // Loan repayments are NOT handled by the trigger (it only creates a
+      // receipt for loan_repayment). Apply the balance effect here so that an
+      // admin-confirmed "loan repayment" actually reduces what the member owes.
+      // Idempotent: guarded by an existing loan_repayments row for this proof.
+      if (proof.payment_type === 'loan_repayment') {
+        try {
+          const proofId = proof.id;
+          const { data: alreadyApplied } = await supabase
+            .from('loan_repayments')
+            .select('id')
+            .eq('reference', proofId)
+            .maybeSingle();
+
+          if (!alreadyApplied) {
+            const repaymentAmount = parseFloat(proof.amount) || 0;
+            // Pick the member's active loan with the highest remaining balance.
+            // (status 'active' first, then 'approved' with a disbursed balance.)
+            const { data: memberLoans } = await supabase
+              .from('loans')
+              .select('id, loan_id, remaining_balance, total_repayment, status')
+              .eq('profile_id', proof.profile_id)
+              .in('status', ['active', 'approved'])
+              .order('remaining_balance', { ascending: false, nullsFirst: false });
+
+            const targetLoan = (memberLoans && memberLoans[0]) || null;
+            if (targetLoan && repaymentAmount > 0) {
+              const currentBal = parseFloat(
+                targetLoan.remaining_balance != null
+                  ? targetLoan.remaining_balance
+                  : targetLoan.total_repayment,
+              ) || 0;
+              const newBalance = Math.max(0, currentBal - repaymentAmount);
+              const loanUpdate = {
+                remaining_balance: newBalance,
+                updated_at: now,
+              };
+              if (newBalance <= 0) {
+                loanUpdate.status = 'completed';
+                loanUpdate.remaining_months = 0;
+              }
+              await supabase.from('loans').update(loanUpdate).eq('id', targetLoan.id);
+
+              await supabase.from('loan_repayments').insert({
+                loan_id: targetLoan.id,
+                profile_id: proof.profile_id,
+                amount: repaymentAmount,
+                paid_at: now,
+                status: 'paid',
+                reference: proofId,
+                recorded_by: req.user.id,
+              });
+
+              logger.info(
+                `Loan repayment applied: proof ${proofId} → loan ${targetLoan.loan_id || targetLoan.id} ` +
+                  `(₦${repaymentAmount}, balance ₦${currentBal} → ₦${newBalance})`,
+              );
+            } else if (!targetLoan) {
+              logger.warn(
+                `Loan repayment proof ${proofId} approved but member has no active/approved loan to apply it to.`,
+              );
+            }
+          }
+        } catch (applyErr) {
+          // Never fail the approval because of the balance application — it can
+          // be reconciled later. The proof is already marked approved.
+          logger.error('Apply loan repayment effect failed (non-fatal):', applyErr.message);
+        }
+
+        // Lift the system default-flag once the member no longer has any
+        // overdue/defaulted/in-recovery loans (Policy: Active Default
+        // Restriction). Manual fraud flags (other flag_reasons) are untouched.
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('id, is_flagged, flag_reason')
+            .eq('id', proof.profile_id)
+            .maybeSingle();
+          if (profile?.is_flagged === true && profile?.flag_reason === 'loan_default') {
+            const { data: blocking } = await supabase
+              .from('loans')
+              .select('id')
+              .eq('profile_id', proof.profile_id)
+              .in('status', ['overdue', 'defaulted', 'in_recovery'])
+              .limit(1);
+            if (!blocking || blocking.length === 0) {
+              await supabase
+                .from('profiles')
+                .update({ is_flagged: false, flag_reason: null })
+                .eq('id', proof.profile_id);
+              logger.info(`Default flag cleared for profile ${proof.profile_id} after repayment verification.`);
+            }
+          }
+        } catch (unflagErr) {
+          logger.warn('Default-flag clear check failed (non-fatal):', unflagErr.message);
+        }
+      }
+
+      // Registration fee approval → mark the fee as paid and activate the
+      // membership (the activation gate: kyc_verified AND registration_fee_paid).
+      // Idempotent — only flips the flag once. Also settles the corresponding
+      // member_fees registration_fee obligation so the wallet/obligations view
+      // no longer lists it as outstanding.
+      if (proof.payment_type === 'registration_fee' && !proof.profile_id === false) {
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('id, registration_fee_paid')
+            .eq('id', proof.profile_id)
+            .maybeSingle();
+
+          if (profile && profile.registration_fee_paid !== true) {
+            await supabase
+              .from('profiles')
+              .update({
+                registration_fee_paid: true,
+                registration_fee_paid_at: now,
+                registration_completed: true,
+                updated_at: now,
+              })
+              .eq('id', proof.profile_id);
+            logger.info(`Registration fee verified — membership activated for profile ${proof.profile_id}`);
+          }
+
+          // Settle any outstanding registration_fee obligation for this member.
+          await supabase
+            .from('member_fees')
+            .update({ status: 'paid', paid_at: now, deposit_id: proof.id })
+            .eq('profile_id', proof.profile_id)
+            .eq('fee_type', 'registration_fee')
+            .eq('status', 'outstanding');
+        } catch (applyFeeErr) {
+          logger.error('Apply registration-fee activation failed (non-fatal):', applyFeeErr.message);
+        }
+      }
 
       // Get the created receipt
       const { data: receipt } = await supabase

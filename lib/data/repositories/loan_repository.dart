@@ -136,10 +136,10 @@ class LoanRepository {
                 : e.monthlyRepayment * e.tenure,
             status: _mapLoanStatus(e.status),
             purpose: e.purpose,
-            guarantorsAccepted: 0,
-            guarantorsRequired: 3,
-            createdAt: e.createdAt,
-            updatedAt: e.createdAt,
+            guarantorsAccepted: e.guarantorsAccepted,
+            guarantorsRequired: e.guarantorsRequired,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
           );
         }).toList();
 

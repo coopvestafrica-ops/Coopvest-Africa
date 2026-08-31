@@ -15,6 +15,7 @@ const supabase = require('../config/supabase');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
+const { ageInYears, MIN_AGE_YEARS } = require('../services/registrationMerge');
 
 // In-memory file upload (10 MB max) — the file is streamed straight into
 // Supabase Storage, never touching the disk.
@@ -87,6 +88,20 @@ router.post(
         ...(bankInfo || {}),
       };
 
+      // Adults only: reject KYC submissions whose date of birth is under 18.
+      // Checked against the merged record so previously saved DOBs are gated
+      // too, not just the one in this request.
+      const dob = mergedPersonal.date_of_birth || kyc.date_of_birth;
+      if (dob) {
+        const age = ageInYears(dob);
+        if (age !== null && age < MIN_AGE_YEARS) {
+          return res.status(422).json({
+            success: false,
+            message: `You must be at least ${MIN_AGE_YEARS} years old to register on Coopvest.`,
+          });
+        }
+      }
+
       const { data, error } = await supabase
         .from('kyc')
         .update({
@@ -138,6 +153,9 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     if (!['selfie', 'id_document'].includes(type)) {
       return res.status(400).json({ success: false, error: "type must be 'selfie' or 'id_document'." });
     }
+    // kyc_documents.type CHECK only allows: national_id, passport, drivers_license,
+    // voters_card, utility_bill, bank_statement. 'id_document' from the app would
+    // violate the constraint, so map it to 'national_id' (a generic national ID).
     const side = (req.body.side || 'front').toString() === 'back' ? 'back' : 'front';
 
     const ext = (req.file.originalname.split('.').pop() || 'jpg').toLowerCase();
@@ -186,7 +204,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       const sideKey = side === 'back' ? 'back_image_url' : 'front_image_url';
       const { error: docErr } = await supabase
         .from('kyc_documents')
-        .insert({ kyc_id: kyc.id, profile_id: req.user.id, type: 'id_document', [sideKey]: url });
+        .insert({ kyc_id: kyc.id, profile_id: req.user.id, type: type === 'id_document' ? 'national_id' : type, [sideKey]: url });
       if (docErr) throw docErr;
     }
 

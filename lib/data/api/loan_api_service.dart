@@ -156,9 +156,16 @@ class LoanData {
   final double interestRate;
   final double monthlyRepayment;
   final double totalRepayment;
+  final double remainingBalance;
   final String status;
   final String purpose;
+  final String? qrId;
   final String? qrCode;
+  final dynamic qrData;
+  final DateTime? qrExpiresAt;
+  final String? qrStatus;
+  final int guarantorsAccepted;
+  final int guarantorsRequired;
   final DateTime createdAt;
 
   LoanData({
@@ -170,16 +177,24 @@ class LoanData {
     required this.interestRate,
     required this.monthlyRepayment,
     this.totalRepayment = 0.0,
+    this.remainingBalance = 0.0,
     required this.status,
     required this.purpose,
+    this.qrId,
     this.qrCode,
+    this.qrData,
+    this.qrExpiresAt,
+    this.qrStatus,
+    this.guarantorsAccepted = 0,
+    this.guarantorsRequired = 3,
     required this.createdAt,
   });
 
   factory LoanData.fromJson(Map<String, dynamic> json) {
     // The /loans list endpoint returns raw DB rows in snake_case
     // (loan_id, loan_type, tenure_months, monthly_repayment, effective_interest_rate,
-    // created_at), while the /loans/apply response uses camelCase. Support both.
+    // created_at, guarantors_accepted, guarantors_required), while the /loans/apply
+    // response uses camelCase. Support both.
     String parseCreatedAt() {
       final v = json['createdAt'] ?? json['created_at'];
       return v == null ? DateTime.now().toIso8601String() : v.toString();
@@ -202,9 +217,22 @@ class LoanData {
       totalRepayment: (json['totalRepayment'] as num?)?.toDouble() ??
           (json['total_repayment'] as num?)?.toDouble() ??
           0.0,
+      remainingBalance: (json['remaining_balance'] as num?)?.toDouble() ??
+          (json['remainingBalance'] as num?)?.toDouble() ??
+          0.0,
       status: (json['status'] ?? '').toString(),
       purpose: (json['purpose'] ?? '').toString(),
-      qrCode: json['qr_code'] as String?,
+      qrId: (json['qr_id'] ?? json['qrId'])?.toString(),
+      qrCode: (json['qr_code'] ?? json['qrCode'])?.toString(),
+      qrData: json['qr_data'] ?? json['qrData'],
+      qrExpiresAt: (json['qr_expires_at'] ?? json['qrExpiresAt']) != null
+          ? DateTime.tryParse((json['qr_expires_at'] ?? json['qrExpiresAt']).toString())
+          : null,
+      qrStatus: (json['qr_status'] ?? json['qrStatus'])?.toString(),
+      guarantorsAccepted: _asInt(json['guarantors_accepted']),
+      guarantorsRequired: _asInt(json['guarantors_required']) > 0
+          ? _asInt(json['guarantors_required'])
+          : 3,
       createdAt: DateTime.tryParse(parseCreatedAt()) ?? DateTime.now(),
     );
   }

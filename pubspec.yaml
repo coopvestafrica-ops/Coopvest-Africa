@@ -2,16 +2,16 @@
 # ─── flutter_native_splash config ─────────────────────────────────────────────
 # Run: dart run flutter_native_splash:create   to generate native assets
 flutter_native_splash:
-  color: "#1B5E20"
-  color_dark: "#0D3D12"
-  image: assets/images/logo.png
-  image_dark: assets/images/logo.png
+  color: "#C6DFC9"
+  color_dark: "#A9CCB5"
+  image: assets/images/splash-logo-transparent.png
+  image_dark: assets/images/splash-logo-transparent.png
   fullscreen: false
   android_12:
-    color: "#1B5E20"
-    color_dark: "#0D3D12"
-    image: assets/images/logo.png
-    image_dark: assets/images/logo.png
+    color: "#C6DFC9"
+    color_dark: "#A9CCB5"
+    image: assets/images/splash-logo-transparent.png
+    image_dark: assets/images/splash-logo-transparent.png
     fullscreen: false
   ios: true
   web: false
@@ -127,6 +127,7 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/animations/
+    - assets/audio/
 
   fonts:
     - family: Inter

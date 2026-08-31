@@ -5,7 +5,12 @@ import '../../../config/theme_config.dart';
 import '../../../config/theme_extension.dart';
 import '../../../data/models/notification_models.dart';
 import '../../../presentation/providers/notifications_provider.dart';
+import '../../../presentation/providers/auth_provider.dart';
 import '../../widgets/common/cards.dart';
+import '../loan/loan_dashboard_screen.dart';
+import '../transactions/transactions_history_screen.dart';
+import '../support/support_home_screen.dart';
+import '../contributions/monthly_contributions_screen.dart';
 
 class NotificationsScreen extends ConsumerStatefulWidget {
   const NotificationsScreen({super.key});
@@ -92,6 +97,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
         if (!notification.isRead) {
           ref.read(notificationsProvider.notifier).markAsRead(notification.id);
         }
+        _openNotificationDestination(context, notification, ref);
       },
       child: AppCard(
         padding: const EdgeInsets.all(16),
@@ -179,6 +185,39 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
         ),
       ),
     );
+  }
+
+  /// Route a tapped notification to the most relevant screen based on its type.
+  void _openNotificationDestination(
+    BuildContext context,
+    AppNotification notification,
+    WidgetRef ref,
+  ) {
+    final user = ref.read(currentUserProvider);
+    final userId = user?.id ?? '';
+    final t = notification.type.toLowerCase();
+
+    Widget? destination;
+    if (t.contains('loan') || t.contains('guarantor') || t.contains('rollover')) {
+      destination = LoanDashboardScreen(
+        userId: userId,
+        userName: user?.name ?? '',
+        userPhone: user?.phone ?? '',
+      );
+    } else if (t.contains('chat') ||
+        t.contains('support') ||
+        t.contains('ticket') ||
+        t.contains('message')) {
+      destination = const SupportHomeScreen();
+    } else if (t.contains('saving') || t.contains('invest') || t.contains('contribution')) {
+      destination = const MonthlyContributionsScreen();
+    } else if (t.contains('transaction') || t.contains('payment') || t.contains('wallet')) {
+      destination = TransactionsHistoryScreen(userId: userId);
+    }
+
+    if (destination != null) {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => destination!));
+    }
   }
 
   Widget _buildEmptyState(BuildContext context) {

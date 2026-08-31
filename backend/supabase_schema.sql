@@ -43,6 +43,7 @@ ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS access_level TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS last_password_change_at TIMESTAMPTZ;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN DEFAULT false;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS firebase_uid TEXT UNIQUE;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS membership_status TEXT NOT NULL DEFAULT 'active';
 
 CREATE INDEX IF NOT EXISTS idx_profiles_user_id ON public.profiles(user_id);
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS public.kyc (
   rejection_reason TEXT,
   national_id TEXT,
   address TEXT,
+  profile_picture TEXT,
   date_of_birth DATE,
   personal_info JSONB DEFAULT '{}'::jsonb,
   contact_info JSONB DEFAULT '{}'::jsonb,
@@ -290,10 +292,11 @@ CREATE TABLE IF NOT EXISTS public.loans (
   remaining_balance DECIMAL(18, 2),
   remaining_months INTEGER,
   next_due_date DATE,
-  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'active', 'rejected', 'completed', 'defaulted')),
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'under_review', 'approved', 'active', 'rejected', 'completed', 'defaulted', 'in_recovery', 'cancelled')),
   approved_by UUID REFERENCES public.profiles(id),
   approved_at TIMESTAMPTZ,
   rejected_reason TEXT,
+  cancelled_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -444,7 +447,7 @@ CREATE TABLE IF NOT EXISTS public.tickets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   ticket_id TEXT UNIQUE NOT NULL,
   profile_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
-  category TEXT NOT NULL CHECK (category IN ('loan_issue','guarantor_consent','referral_bonus','repayment_issue','account_kyc','technical_bug','other')),
+  category TEXT NOT NULL CHECK (category IN ('loan_issue','guarantor_consent','referral_bonus','repayment_issue','account_kyc','contribution','withdrawal','technical_bug','complaint','other')),
   priority TEXT DEFAULT 'medium' CHECK (priority IN ('low','medium','high','urgent')),
   status TEXT DEFAULT 'open' CHECK (status IN ('open','in_progress','awaiting_user','resolved','closed')),
   title TEXT NOT NULL,

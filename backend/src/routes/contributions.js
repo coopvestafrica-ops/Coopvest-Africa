@@ -23,6 +23,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
+const loanPolicy = require('../lib/loanPolicy');
 const logger = require('../utils/logger');
 
 router.use(authenticate);
@@ -70,15 +71,63 @@ router.get('/summary', async (req, res) => {
     const pending = (all || []).filter((c) => c.status === 'pending');
     const overdue = (all || []).filter((c) => c.status === 'overdue');
 
-    const totalThisMonth = successful
+    let totalThisMonth = successful
       .filter((c) => (c.contribution_month || '').startsWith(thisMonth))
       .reduce((s, c) => s + parseFloat(c.amount || 0), 0);
 
-    const totalThisYear = successful
+    let totalThisYear = successful
       .filter((c) => (c.contribution_month || '').startsWith(thisYear))
       .reduce((s, c) => s + parseFloat(c.amount || 0), 0);
 
-    const lifetimeContributions = successful.reduce((s, c) => s + parseFloat(c.amount || 0), 0);
+    let lifetimeContributions = successful.reduce((s, c) => s + parseFloat(c.amount || 0), 0);
+
+    // Fallback to the savings table + this-month credit transactions when the
+    // contributions table has no rows. Members who deposit via the wallet flow
+    // accrue savings without contribution records, so without this fallback the
+    // "monthly contribution progress" card shows 0/₦10,000 even when the member
+    // has real savings. Only used as a floor — never double-counts contribution
+    // rows that already exist.
+    if (!all || all.length === 0) {
+      try {
+        const { data: savings } = await supabase
+          .from('savings')
+          .select('total_saved, monthly_savings, last_savings_date')
+          .eq('profile_id', req.user.id)
+          .maybeSingle();
+        if (savings) {
+          lifetimeContributions = Number(savings.total_saved) || 0;
+        }
+
+        // This month's credit transactions (deposits/contributions) give a
+        // realistic "this month" figure for the progress card.
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+        const { data: monthCredits } = await supabase
+          .from('transactions')
+          .select('amount, type, category, created_at')
+          .eq('profile_id', req.user.id)
+          .in('category', ['credit', 'deposit'])
+          .gte('created_at', monthStart);
+        totalThisMonth = (monthCredits || []).reduce(
+          (s, t) => s + (Number(t.amount) || 0),
+          0,
+        );
+
+        // This year's credits for the yearly figure.
+        const yearStart = new Date(now.getFullYear(), 0, 1).toISOString();
+        const { data: yearCredits } = await supabase
+          .from('transactions')
+          .select('amount, category, created_at')
+          .eq('profile_id', req.user.id)
+          .in('category', ['credit', 'deposit'])
+          .gte('created_at', yearStart);
+        totalThisYear = (yearCredits || []).reduce(
+          (s, t) => s + (Number(t.amount) || 0),
+          0,
+        );
+      } catch (fbErr) {
+        logger.warn('contributions summary savings fallback failed:', fbErr.message);
+      }
+    }
 
     const plan = await getOrCreatePlan(req.user.id);
 
@@ -196,6 +245,29 @@ router.post(
         return res.status(400).json({
           success: false,
           error: 'Reduction amount must be less than your current monthly contribution.',
+        });
+      }
+
+      // Policy: a member with an active loan may not reduce their monthly
+      // contribution below the level used for that loan's eligibility
+      // (increases are always allowed).
+      const { data: activeLoans, error: loansErr } = await supabase
+        .from('loans')
+        .select('id, loan_id, monthly_contribution_at_application')
+        .eq('profile_id', req.user.id)
+        .in('status', loanPolicy.ACTIVE_LOAN_STATUSES);
+      if (loansErr && !/Could not find the .* column|column .* does not exist/i.test(loansErr.message || '')) throw loansErr;
+
+      const floor = (activeLoans || []).reduce(
+        (max, l) => Math.max(max, Number(l.monthly_contribution_at_application) || 0),
+        0,
+      );
+      if (floor > 0 && requested_amount < floor) {
+        return res.status(400).json({
+          success: false,
+          code: 'REDUCTION_BLOCKED_ACTIVE_LOAN',
+          error: `You have an active loan. Your monthly contribution cannot be reduced below ₦${floor.toLocaleString()} — the level used for your loan eligibility — until the loan is fully repaid. You may still increase your contribution at any time.`,
+          minimumAllowed: floor,
         });
       }
 

@@ -3,10 +3,29 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../config/theme_config.dart';
 import '../../../config/theme_extension.dart';
 import '../../../core/utils/utils.dart';
+import '../../../data/api/loan_api_service.dart';
 import '../../../data/models/loan_models.dart';
 import '../../../presentation/providers/loan_provider.dart';
 import '../../../presentation/widgets/common/buttons.dart';
 import '../../../presentation/widgets/common/cards.dart';
+
+/// Fetches the real guarantor list for a loan from the backend
+/// (GET /loans/:loanId/guarantors).
+final loanGuarantorsProvider =
+    FutureProvider.family<List<GuarantorData>, String>((ref, loanId) async {
+  final api = ref.watch(loanApiServiceProvider);
+  final response = await api.getLoanGuarantors(loanId);
+  return response.guarantors;
+});
+
+/// Fetches the real repayment schedule for a loan from the backend
+/// (GET /loans/:loanId/repayment-schedule).
+final loanRepaymentScheduleProvider =
+    FutureProvider.family<RepaymentScheduleData, String>((ref, loanId) async {
+  final api = ref.watch(loanApiServiceProvider);
+  final response = await api.getRepaymentSchedule(loanId);
+  return response.schedule;
+});
 
 /// Loan Details Screen - View detailed information about a specific loan
 class LoanDetailsScreen extends ConsumerWidget {
@@ -43,18 +62,23 @@ class LoanDetailsScreen extends ConsumerWidget {
       ),
     );
 
-    final _repaymentSchedule = [
-      {'installment': 1, 'amount': 13125.0, 'dueDate': DateTime.now().subtract(const Duration(days: 25)), 'status': 'Paid'},
-      {'installment': 2, 'amount': 13125.0, 'dueDate': DateTime.now().subtract(const Duration(days: 5)), 'status': 'Paid'},
-      {'installment': 3, 'amount': 13125.0, 'dueDate': DateTime.now().add(const Duration(days: 5)), 'status': 'Due'},
-      {'installment': 4, 'amount': 13125.0, 'dueDate': DateTime.now().add(const Duration(days: 35)), 'status': 'Upcoming'},
-    ];
+    final scheduleAsync = ref.watch(loanRepaymentScheduleProvider(loanId));
+    final guarantorsAsync = ref.watch(loanGuarantorsProvider(loanId));
 
-    final _guarantors = [
-      {'name': 'John Smith', 'phone': '+2348012345678', 'status': 'Confirmed', 'confirmedAt': DateTime.now().subtract(const Duration(days: 20))},
-      {'name': 'Jane Doe', 'phone': '+2348098765432', 'status': 'Confirmed', 'confirmedAt': DateTime.now().subtract(const Duration(days: 18))},
-      {'name': 'Bob Wilson', 'phone': '+2348076543210', 'status': 'Confirmed', 'confirmedAt': DateTime.now().subtract(const Duration(days: 15))},
-    ];
+    // Next Payment Due comes from the real repayment schedule: the first
+    // unpaid installment. The Loan model's nextRepaymentDate getter is
+    // unreliable here because disbursedAt is never populated by the API.
+    final nextPaymentDueLabel = scheduleAsync.when(
+      loading: () => '...',
+      error: (_, __) => 'N/A',
+      data: (schedule) {
+        final unpaid = schedule.installments
+            .where((i) => i.status.toLowerCase() != 'paid')
+            .toList();
+        if (unpaid.isEmpty) return 'Fully repaid';
+        return _formatDate(unpaid.first.dueDate);
+      },
+    );
 
     final statusColor = _getStatusColor(loan.status);
 
@@ -130,7 +154,7 @@ class LoanDetailsScreen extends ConsumerWidget {
                     Divider(height: 24, color: context.dividerColor),
                     _buildSummaryRow(context, 'Interest Rate', '${loan.interestRate}%'),
                     Divider(height: 24, color: context.dividerColor),
-                    _buildSummaryRow(context, 'Next Payment Due', _formatDate(loan.nextRepaymentDate) ?? 'N/A'),
+                    _buildSummaryRow(context, 'Next Payment Due', nextPaymentDueLabel),
                   ],
                 ),
               ),
@@ -142,7 +166,42 @@ class LoanDetailsScreen extends ConsumerWidget {
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: context.textPrimary),
               ),
               const SizedBox(height: 12),
-              ..._repaymentSchedule.map((installment) => _buildInstallmentCard(context, installment)),
+              scheduleAsync.when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+                error: (_, __) => AppCard(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Could not load repayment schedule.',
+                          style: TextStyle(color: context.textSecondary),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => ref.invalidate(loanRepaymentScheduleProvider(loanId)),
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+                data: (schedule) => schedule.installments.isEmpty
+                    ? AppCard(
+                        child: Center(
+                          child: Text(
+                            'No repayment schedule available',
+                            style: TextStyle(color: context.textSecondary),
+                          ),
+                        ),
+                      )
+                    : Column(
+                        children: schedule.installments
+                            .map((installment) => _buildInstallmentCard(context, installment))
+                            .toList(),
+                      ),
+              ),
 
               const SizedBox(height: 24),
 
@@ -151,7 +210,42 @@ class LoanDetailsScreen extends ConsumerWidget {
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: context.textPrimary),
               ),
               const SizedBox(height: 12),
-              ..._guarantors.map((guarantor) => _buildGuarantorCard(context, guarantor)),
+              guarantorsAsync.when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+                error: (_, __) => AppCard(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Could not load guarantors.',
+                          style: TextStyle(color: context.textSecondary),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => ref.invalidate(loanGuarantorsProvider(loanId)),
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+                data: (guarantors) => guarantors.isEmpty
+                    ? AppCard(
+                        child: Center(
+                          child: Text(
+                            'No guarantors yet',
+                            style: TextStyle(color: context.textSecondary),
+                          ),
+                        ),
+                      )
+                    : Column(
+                        children: guarantors
+                            .map((guarantor) => _buildGuarantorCard(context, guarantor))
+                            .toList(),
+                      ),
+              ),
 
               const SizedBox(height: 32),
 
@@ -246,8 +340,11 @@ class LoanDetailsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildInstallmentCard(BuildContext context, Map<String, dynamic> installment) {
-    final statusColor = _getInstallmentStatusColor(installment['status'] as String);
+  Widget _buildInstallmentCard(BuildContext context, RepaymentInstallment installment) {
+    final statusColor = _getInstallmentStatusColor(installment.status);
+    final statusLabel = installment.status.isEmpty
+        ? ''
+        : installment.status[0].toUpperCase() + installment.status.substring(1);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: AppCard(
@@ -262,7 +359,7 @@ class LoanDetailsScreen extends ConsumerWidget {
               ),
               child: Center(
                 child: Text(
-                  '${installment['installment']}',
+                  '${installment.installmentNumber}',
                   style: TextStyle(color: statusColor, fontWeight: FontWeight.bold),
                 ),
               ),
@@ -272,8 +369,8 @@ class LoanDetailsScreen extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('\u20a6${(installment['amount'] as double).formatNumber()}', style: TextStyle(fontWeight: FontWeight.bold, color: context.textPrimary)),
-                  Text('Due: ${_formatDate(installment['dueDate'] as DateTime)}', style: TextStyle(fontSize: 12, color: context.textSecondary)),
+                  Text('\u20a6${installment.amount.formatNumber()}', style: TextStyle(fontWeight: FontWeight.bold, color: context.textPrimary)),
+                  Text('Due: ${_formatDate(installment.dueDate)}', style: TextStyle(fontSize: 12, color: context.textSecondary)),
                 ],
               ),
             ),
@@ -284,7 +381,7 @@ class LoanDetailsScreen extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
-                installment['status'] as String,
+                statusLabel,
                 style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.bold),
               ),
             ),
@@ -294,7 +391,10 @@ class LoanDetailsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildGuarantorCard(BuildContext context, Map<String, dynamic> guarantor) {
+  Widget _buildGuarantorCard(BuildContext context, GuarantorData guarantor) {
+    final confirmed = const ['consented', 'confirmed', 'accepted', 'active']
+        .contains(guarantor.status.toLowerCase());
+    final statusLabel = confirmed ? 'Confirmed' : 'Pending';
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: AppCard(
@@ -309,12 +409,19 @@ class LoanDetailsScreen extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(guarantor['name'] as String, style: TextStyle(fontWeight: FontWeight.bold, color: context.textPrimary)),
-                  Text(guarantor['phone'] as String, style: TextStyle(fontSize: 12, color: context.textSecondary)),
+                  Text(guarantor.name, style: TextStyle(fontWeight: FontWeight.bold, color: context.textPrimary)),
+                  Text(
+                    guarantor.phone.isNotEmpty ? guarantor.phone : statusLabel,
+                    style: TextStyle(fontSize: 12, color: context.textSecondary),
+                  ),
                 ],
               ),
             ),
-            const Icon(Icons.check_circle, color: CoopvestColors.success, size: 20),
+            Icon(
+              confirmed ? Icons.check_circle : Icons.schedule,
+              color: confirmed ? CoopvestColors.success : CoopvestColors.warning,
+              size: 20,
+            ),
           ],
         ),
       ),
@@ -341,6 +448,9 @@ class LoanDetailsScreen extends ConsumerWidget {
         return CoopvestColors.success;
       case 'due':
         return CoopvestColors.warning;
+      case 'missed':
+      case 'overdue':
+        return CoopvestColors.error;
       case 'upcoming':
         return CoopvestColors.primary;
       default:

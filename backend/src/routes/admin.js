@@ -28,6 +28,16 @@ router.get('/payment-settings', async (req, res) => {
       .eq('key', 'payment_account')
       .maybeSingle();
 
+    // Gracefully degrade if the settings table hasn't been migrated yet.
+    if (error && error.message?.includes('does not exist')) {
+      return res.json({
+        success: true,
+        bank: process.env.DEFAULT_PAYMENT_BANK || 'Opay',
+        account_name: process.env.DEFAULT_PAYMENT_ACCOUNT_NAME || 'Coopvest Africa',
+        account_number: process.env.DEFAULT_PAYMENT_ACCOUNT_NUMBER || '',
+        _migrated: false,
+      });
+    }
     if (error) throw error;
 
     if (data?.value) {
@@ -136,6 +146,9 @@ router.get('/salary-deduction', async (req, res) => {
       .eq('key', 'salary_deduction_global')
       .maybeSingle();
 
+    if (error && error.message?.includes('does not exist')) {
+      return res.json({ success: true, enabled: false, _migrated: false });
+    }
     if (error) throw error;
 
     res.json({

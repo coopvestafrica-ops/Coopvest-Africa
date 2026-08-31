@@ -21,6 +21,7 @@ class User extends Equatable {
   final String? referralCode;
   final bool isEmailVerified;
   final bool registrationCompleted; // true if user completed registration flow
+  final bool registrationFeePaid; // true once the entrance fee is verified & settled
   final DateTime createdAt;
   final DateTime? updatedAt;
 
@@ -44,6 +45,7 @@ class User extends Equatable {
     this.referralCode,
     this.isEmailVerified = false,
     this.registrationCompleted = false,
+    this.registrationFeePaid = false,
     required this.createdAt,
     this.updatedAt,
   });
@@ -97,6 +99,10 @@ class User extends Equatable {
       referralCode: json['referral_code'] as String? ?? json['referralCode'] as String?,
       isEmailVerified: json['isEmailVerified'] as bool? ?? json['is_email_verified'] as bool? ?? json['emailVerified'] as bool? ?? false,
       registrationCompleted: json['registration_completed'] as bool? ?? json['registrationCompleted'] as bool? ?? false,
+      registrationFeePaid: json['registration_fee_paid'] as bool? ??
+          (json['activation_gate'] is Map<String, dynamic>
+              ? (json['activation_gate'] as Map<String, dynamic>)['registration_fee_paid'] as bool? ?? false
+              : false),
       createdAt: json['createdAt'] != null ? DateTime.parse(json['createdAt'] as String) : (json['created_at'] != null ? DateTime.parse(json['created_at'] as String) : DateTime.now()),
       updatedAt: json['updatedAt'] != null ? DateTime.parse(json['updatedAt'] as String) : (json['updated_at'] != null ? DateTime.parse(json['updated_at'] as String) : null),
     );
@@ -133,14 +139,17 @@ class User extends Equatable {
     String? gender,
     String? occupation,
     String? kycStatus,
+    String? membershipStatus,
     String? idType,
     String? idNumber,
     String? address,
     String? city,
     String? state,
     String? country,
+    String? profilePicture,
     bool? isEmailVerified,
     bool? registrationCompleted,
+    bool? registrationFeePaid,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -153,14 +162,17 @@ class User extends Equatable {
       gender: gender ?? this.gender,
       occupation: occupation ?? this.occupation,
       kycStatus: kycStatus ?? this.kycStatus,
+      membershipStatus: membershipStatus ?? this.membershipStatus,
       idType: idType ?? this.idType,
       idNumber: idNumber ?? this.idNumber,
       address: address ?? this.address,
       city: city ?? this.city,
       state: state ?? this.state,
       country: country ?? this.country,
+      profilePicture: profilePicture ?? this.profilePicture,
       isEmailVerified: isEmailVerified ?? this.isEmailVerified,
       registrationCompleted: registrationCompleted ?? this.registrationCompleted,
+      registrationFeePaid: registrationFeePaid ?? this.registrationFeePaid,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -183,6 +195,8 @@ class User extends Equatable {
     state,
     country,
     isEmailVerified,
+    registrationCompleted,
+    registrationFeePaid,
     createdAt,
     updatedAt,
   ];

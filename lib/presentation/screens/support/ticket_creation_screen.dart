@@ -71,7 +71,7 @@ class _TicketCreationScreenState extends ConsumerState<TicketCreationScreen> {
     setState(() { _isSubmitting = true; _errorMessage = null; });
     
     try {
-      final response = await ApiClient().getDio().post('/support-tickets', data: {
+      final response = await ApiClient().getDio().post('/tickets', data: {
         'title': _titleController.text.trim(),
         'description': _descriptionController.text.trim(),
         'category': _selectedCategory,

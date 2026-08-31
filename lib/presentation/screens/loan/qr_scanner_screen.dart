@@ -32,9 +32,23 @@ class QRScannerScreen extends ConsumerStatefulWidget {
 }
 
 class _QRScannerScreenState extends ConsumerState<QRScannerScreen> {
+  // An explicit controller ensures detection reliably starts with the screen
+  // and is properly released on dispose. noDuplicates avoids re-firing on the
+  // same code every frame.
+  final MobileScannerController _controller = MobileScannerController(
+    detectionSpeed: DetectionSpeed.noDuplicates,
+    facing: CameraFacing.back,
+  );
+
   bool _hasScanned = false;
   bool _isProcessing = false;
   String _errorMessage = '';
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   void _handleBarcode(BarcodeCapture barcodes) {
     if (_hasScanned || _isProcessing) return;
@@ -223,7 +237,25 @@ class _QRScannerScreenState extends ConsumerState<QRScannerScreen> {
           Expanded(
             child: Stack(
               children: [
-                MobileScanner(onDetect: _handleBarcode),
+                MobileScanner(
+                  controller: _controller,
+                  onDetect: _handleBarcode,
+                  // Surface camera/permission failures instead of showing a
+                  // silent black preview.
+                  errorBuilder: (context, exception, child) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'Camera unavailable (${exception.errorCode}). '
+                          'Please allow camera access for Coopvest in your device settings and try again.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    );
+                  },
+                ),
                 Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,

@@ -14,6 +14,7 @@ const supabase = require('../config/supabase');
 const { requireAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
+const notifyService = require('../services/notifyService');
 
 router.use(requireAdmin);
 
@@ -91,8 +92,8 @@ router.post(
         .from('ticket_messages')
         .insert({
           ticket_id: req.params.id,
-          sender_id: req.user.id,
-          sender_role: 'admin',
+          author_id: req.user.id,
+          author_role: 'staff',
           body: req.body.body,
         })
         .select('*')
@@ -100,8 +101,30 @@ router.post(
       if (error) throw error;
       await supabase
         .from('tickets')
-        .update({ status: 'awaiting_member', last_activity_at: new Date().toISOString() })
+        .update({ status: 'awaiting_user', updated_at: new Date().toISOString() })
         .eq('id', req.params.id);
+
+      // Notify the member that support replied to their live-chat ticket.
+      try {
+        const { data: ticket } = await supabase
+          .from('tickets')
+          .select('profile_id, subject')
+          .eq('id', req.params.id)
+          .maybeSingle();
+        if (ticket && ticket.profile_id) {
+          const preview = String(req.body.body || '').slice(0, 120);
+          await notifyService.sendInApp({
+            profileId: ticket.profile_id,
+            title: '💬 New reply from support',
+            body: preview,
+            type: 'system',
+            category: 'info',
+          });
+        }
+      } catch (e) {
+        logger.warn('admin ticket reply notify failed:', e.message);
+      }
+
       res.status(201).json({ success: true, message: msg });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -116,7 +139,7 @@ router.patch(
   '/:id',
   [
     param('id').isUUID(),
-    body('status').optional().isIn(['open', 'awaiting_member', 'awaiting_support', 'resolved', 'closed']),
+    body('status').optional().isIn(['open', 'in_progress', 'awaiting_user', 'resolved', 'closed']),
     body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
     body('category').optional().isString(),
     body('assignedTo').optional().isString(),
@@ -128,11 +151,12 @@ router.patch(
       if (req.body.status !== undefined) update.status = req.body.status;
       if (req.body.priority !== undefined) update.priority = req.body.priority;
       if (req.body.category !== undefined) update.category = req.body.category;
-      if (req.body.assignedTo !== undefined) update.assigned_to = req.body.assignedTo;
+      if (req.body.assignedTo !== undefined) update.assigned_staff_id = req.body.assignedTo;
       if (req.body.status === 'closed' || req.body.status === 'resolved') {
-        update.closed_at = new Date().toISOString();
+        update.resolved_at = new Date().toISOString();
+        update.resolved_by = req.user.id;
       }
-      update.last_activity_at = new Date().toISOString();
+      update.updated_at = new Date().toISOString();
 
       const { data, error } = await supabase
         .from('tickets')

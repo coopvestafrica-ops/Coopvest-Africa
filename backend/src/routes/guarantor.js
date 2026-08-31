@@ -20,8 +20,80 @@ const supabase = require('../config/supabase');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const logger = require('../utils/logger');
+const notifyService = require('../services/notifyService');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Notify the borrower when a guarantor consents to / declines their loan. Never throws. */
+async function notifyBorrowerOfGuarantor(loanId, guarantorId, accepted) {
+  try {
+    const { data: loan } = await supabase
+      .from('loans')
+      .select('borrower_id, profile_id, user_id, amount')
+      .eq('id', loanId)
+      .maybeSingle();
+    const borrowerId = loan && (loan.borrower_id || loan.profile_id || loan.user_id);
+    if (!borrowerId || borrowerId === guarantorId) return;
+
+    let guarantorName = 'A guarantor';
+    const { data: g } = await supabase.from('profiles').select('name').eq('id', guarantorId).maybeSingle();
+    if (g && g.name) guarantorName = g.name;
+
+    await notifyService.sendInApp({
+      profileId: borrowerId,
+      title: accepted ? '✅ Guarantor Approved' : 'Guarantor Declined',
+      body: accepted
+        ? `${guarantorName} approved your loan guarantee request.`
+        : `${guarantorName} declined your loan guarantee request.`,
+      type: 'loan',
+      category: accepted ? 'success' : 'warning',
+    });
+  } catch (e) {
+    logger.warn('notifyBorrowerOfGuarantor failed:', e.message);
+  }
+}
+
+const GUARANTORS_REQUIRED = 3;
+
+/**
+ * Promote a loan from 'pending' to 'under_review' once all required guarantors
+ * have consented. The Admin Dashboard only surfaces 'under_review' (and later)
+ * loans for final approval, so a loan stays invisible to admins while it is
+ * still gathering guarantor consents.
+ *
+ * Safe to call after every consent: it only flips 'pending' loans and only
+ * when the consented count meets the required threshold.
+ */
+async function promoteLoanIfReady(loanId, now = new Date().toISOString()) {
+  if (!loanId) return;
+  try {
+    const { count: consentedCount } = await supabase
+      .from('loan_guarantors')
+      .select('id', { count: 'exact', head: true })
+      .eq('loan_id', loanId)
+      .eq('status', 'consented');
+
+    const required = GUARANTORS_REQUIRED; // loan_qrs.guarantors_required defaults to 3
+    if ((consentedCount || 0) >= required) {
+      // Only flip loans still gathering guarantors; leave later statuses alone.
+      const { data: loan } = await supabase
+        .from('loans')
+        .select('status')
+        .eq('id', loanId)
+        .maybeSingle();
+      if (loan && loan.status === 'pending') {
+        await supabase
+          .from('loans')
+          .update({ status: 'under_review', updated_at: now })
+          .eq('id', loanId)
+          .neq('status', 'under_review');
+        logger.info(`[guarantor] loan ${loanId} promoted to under_review (${consentedCount}/${required} guarantors consented)`);
+      }
+    }
+  } catch (err) {
+    logger.warn(`[guarantor] promoteLoanIfReady failed for ${loanId}:`, err.message);
+  }
+}
 
 /**
  * Resolve a loanId param to the canonical UUID (loans.id).
@@ -333,6 +405,22 @@ router.post(
         return res.status(400).json({ success: false, error: `Request is already ${mapStatus(row.status)}` });
       }
 
+      // Borrowers cannot guarantee their own loan.
+      {
+        const { data: loanRow, error: loanErr } = await supabase
+          .from('loans')
+          .select('profile_id')
+          .eq('id', row.loan_id)
+          .maybeSingle();
+        if (loanErr) throw loanErr;
+        if (loanRow && loanRow.profile_id === req.user.id) {
+          return res.status(400).json({
+            success: false,
+            error: 'You cannot stand as a guarantor for your own loan. Please have someone else scan the QR code.',
+          });
+        }
+      }
+
       const now = new Date().toISOString();
 
       // Always update by the resolved PK (row.id), not the raw requestId param
@@ -366,6 +454,12 @@ router.post(
         target_id: row.id,
         metadata: { loanId: row.loan_id },
       }).then(() => {}, () => {});
+
+      // If this consent completes the guarantor set, promote the loan so the
+      // Admin Dashboard can surface it for final approval.
+      await promoteLoanIfReady(row.loan_id, now);
+
+      await notifyBorrowerOfGuarantor(row.loan_id, req.user.id, true);
 
       res.json({ success: true, message: 'Guarantee accepted successfully' });
     } catch (err) {
@@ -444,6 +538,8 @@ router.post(
         target_id: row.id,
         metadata: { loanId: row.loan_id, reason: reason || null },
       }).then(() => {}, () => {});
+
+      await notifyBorrowerOfGuarantor(row.loan_id, req.user.id, false);
 
       res.json({ success: true, message: 'Guarantee request declined' });
     } catch (err) {
@@ -598,6 +694,20 @@ router.post(
         return res.status(400).json({ success: false, error: 'Invalid loan reference format. Please update your app and try again.' });
       }
 
+      // Borrowers cannot guarantee their own loan.
+      const { data: loanRow, error: loanErr } = await supabase
+        .from('loans')
+        .select('profile_id')
+        .eq('id', loanId)
+        .maybeSingle();
+      if (loanErr) throw loanErr;
+      if (loanRow && loanRow.profile_id === guarantorId) {
+        return res.status(400).json({
+          success: false,
+          error: 'You cannot stand as a guarantor for your own loan. Please have someone else scan the QR code.',
+        });
+      }
+
       const now = new Date().toISOString();
 
       // Check if a loan_guarantors row already exists for this user + loan
@@ -660,6 +770,10 @@ router.post(
         target_id: loanId,
         metadata: { loanId, guarantorName: guarantor_name },
       }).then(() => {}, () => {});
+
+      // If this consent completes the guarantor set, promote the loan so the
+      // Admin Dashboard can surface it for final approval.
+      await promoteLoanIfReady(loanId, now);
 
       res.json({
         success: true,

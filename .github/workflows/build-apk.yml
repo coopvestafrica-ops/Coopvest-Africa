@@ -35,6 +35,20 @@ jobs:
       actions: read
 
     steps:
+      # Ubuntu runners ship with ~14GB free; Flutter SDK + Android SDK/NDK +
+      # Gradle caches exceed that and the release build dies with
+      # "No space left on device" (ExtractJniTransform). Reclaim ~15GB of
+      # preinstalled-but-unused tooling before doing anything else.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /opt/pypy
+          sudo rm -rf /opt/node_modules
+          docker system prune -af > /dev/null 2>&1 || true
+          df -h /
+
       - name: Checkout repository
         uses: actions/checkout@v4
 

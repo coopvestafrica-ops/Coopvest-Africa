@@ -64,3 +64,17 @@
 -keep class io.flutter.** { *; }
 -keep class io.flutter.plugin.** { *; }
 -dontwarn io.flutter.**
+
+# ML Kit Barcode Scanning (used by mobile_scanner) — without these rules,
+# R8 minification strips the barcode detector and QR scanning silently
+# fails in release builds.
+-keep class com.google.mlkit.vision.barcode.** { *; }
+-keep class com.google.mlkit.vision.common.** { *; }
+-keep class com.google.mlkit.common.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_barcode.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_common.** { *; }
+-dontwarn com.google.mlkit.**
+
+# mobile_scanner plugin
+-keep class dev.steenbakker.mobile_scanner.** { *; }
+-dontwarn dev.steenbakker.mobile_scanner.**

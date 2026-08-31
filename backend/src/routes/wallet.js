@@ -129,12 +129,159 @@ async function recordTransaction(profileId, row) {
 }
 
 /**
+ * computeObligations(profileId)
+ *
+ * Breakdown of the member's current obligations. Savings, loan repayment,
+ * fines and fees are tracked separately — the wallet balance is never the
+ * source of "amount due". Used by GET /wallet/obligations (member) and
+ * GET /admin/members/:id/obligations (admin).
+ */
+const ACTIVE_LOAN_STATUSES = ['active', 'repaying', 'overdue', 'approved', 'disbursed'];
+
+async function computeObligations(profileId) {
+  const obligations = {
+    monthly_savings: 0,
+    loans: [],       // [{ loan_id, monthly_repayment, remaining_balance, status }]
+    fines: [],       // outstanding member_fees rows (type='fine')
+    fees: [],        // outstanding member_fees rows (type='fee'|'registration_fee')
+    month_paid_savings: false,
+    month_paid_loan: false, // reserved; paid flags evaluated per loan below
+  };
+
+  // Pledged monthly contribution
+  try {
+    const { data: savings } = await supabase
+      .from('savings')
+      .select('monthly_savings')
+      .eq('profile_id', profileId)
+      .maybeSingle();
+    obligations.monthly_savings = Number(savings?.monthly_savings) || 0;
+  } catch (sErr) {
+    logger.warn('obligations: savings lookup failed:', sErr.message);
+  }
+
+  // Active loan obligations
+  try {
+    const { data: loans } = await supabase
+      .from('loans')
+      .select('id, loan_id, monthly_repayment, remaining_balance, status')
+      .eq('profile_id', profileId)
+      .in('status', ACTIVE_LOAN_STATUSES);
+    obligations.loans = (loans || []).map((l) => ({
+      loan_id: l.loan_id || l.id,
+      monthly_repayment: Number(l.monthly_repayment) || 0,
+      remaining_balance: Number(l.remaining_balance ?? 0),
+      status: l.status,
+    }));
+  } catch (lErr) {
+    logger.warn('obligations: loans lookup failed:', lErr.message);
+  }
+
+  // Outstanding fines / fees
+  try {
+    const { data: memberFees } = await supabase
+      .from('member_fees')
+      .select('id, fee_type, label, loan_id, amount, created_at')
+      .eq('profile_id', profileId)
+      .eq('status', 'outstanding')
+      .order('created_at', { ascending: false });
+    for (const mf of memberFees || []) {
+      const row = {
+        id: mf.id,
+        label: mf.label,
+        loan_id: mf.loan_id,
+        amount: Number(mf.amount) || 0,
+        created_at: mf.created_at,
+      };
+      if (mf.fee_type === 'fine') obligations.fines.push(row);
+      else obligations.fees.push(row);
+    }
+  } catch (fErr) {
+    logger.warn('obligations: member_fees lookup failed:', fErr.message);
+  }
+
+  const loanMonthly = obligations.loans.reduce((s, l) => s + l.monthly_repayment, 0);
+  const finesTotal = obligations.fines.reduce((s, f) => s + f.amount, 0);
+  const feesTotal = obligations.fees.reduce((s, f) => s + f.amount, 0);
+
+  obligations.total_due =
+    obligations.monthly_savings + loanMonthly + finesTotal + feesTotal;
+
+  return obligations;
+}
+
+/**
+ * GET /api/v1/wallet/obligations
+ *
+ * Member-facing "Amount Due" breakdown:
+ *   monthly_savings | loan monthly_repayment/remaining | outstanding fines |
+ *   outstanding fees | total_due
+ */
+router.get('/obligations', authenticate, async (req, res) => {
+  try {
+    const obligations = await computeObligations(req.user.id);
+    res.json({ success: true, obligations });
+  } catch (err) {
+    logger.error('obligations error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/v1/wallet/balance
  */
 router.get('/balance', authenticate, async (req, res) => {
   try {
     const wallet = await ensureWallet(req.user.id);
-    res.json({ success: true, balance: Number(wallet.balance), currency: wallet.currency });
+
+    // Enrich with savings totals so the mobile dashboard's Savings card and
+    // Insights can show real data (the mobile parser reads total_savings and
+    // total_contributions). Best-effort: never fail the balance call if the
+    // savings row is missing.
+    let totalSavings = 0;
+    let totalContributions = 0;
+    let monthlySavings = 0;
+    let consecutiveMonths = 0;
+    try {
+      const { data: savings } = await supabase
+        .from('savings')
+        .select('total_saved, monthly_savings, consecutive_months')
+        .eq('profile_id', req.user.id)
+        .maybeSingle();
+      if (savings) {
+        totalSavings = Number(savings.total_saved) || 0;
+        monthlySavings = Number(savings.monthly_savings) || 0;
+        consecutiveMonths = Number(savings.consecutive_months) || 0;
+      }
+    } catch (sErr) {
+      logger.warn('wallet balance: savings lookup failed:', sErr.message);
+    }
+
+    // Total confirmed contributions = sum of successful contribution records.
+    try {
+      const { data: contribRows } = await supabase
+        .from('contributions')
+        .select('amount, status')
+        .eq('profile_id', req.user.id)
+        .in('status', ['completed', 'successful', 'approved']);
+      totalContributions = (contribRows || []).reduce(
+        (sum, c) => sum + (Number(c.amount) || 0),
+        0,
+      );
+    } catch (cErr) {
+      logger.warn('wallet balance: contributions lookup failed:', cErr.message);
+    }
+
+    res.json({
+      success: true,
+      balance: Number(wallet.balance),
+      currency: wallet.currency || 'NGN',
+      total_savings: totalSavings,
+      total_contributions: totalContributions,
+      monthly_savings: monthlySavings,
+      consecutive_months: consecutiveMonths,
+      available_for_withdrawal: Number(wallet.balance),
+    });
   } catch (err) {
     logger.error('wallet balance error:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -209,12 +356,54 @@ router.post(
     body('sender_account_name').optional().isString(),
     body('sender_account_number').optional().isString(),
     body('proof_url').optional().isURL(),
-    body('payment_type').optional().isIn(['monthly_contribution', 'loan_repayment', 'overdue_payment', 'fine']),
+    body('allocation_type').optional().isIn(['monthly_contribution', 'loan_repayment', 'fine', 'fee', 'registration_fee', 'mixed']),
+    body('loan_id').optional().isString(),
+    body('fee_id').optional().isString(),
+    body('savings_amount').optional().isFloat({ min: 0 }),
+    body('loan_amount').optional().isFloat({ min: 0 }),
+    body('allocations').optional().isArray(),
   ],
   validate,
   async (req, res) => {
     try {
-      const { amount, description, payment_reference, payment_date, bank_name, sender_account_name, sender_account_number, proof_url, payment_type } = req.body;
+      const { amount, description, payment_reference, payment_date, bank_name, sender_account_name, sender_account_number, proof_url, allocation_type, loan_id, fee_id, savings_amount, loan_amount } = req.body;
+      let allocations = req.body.allocations;
+      const allocationType = allocation_type || (allocations ? 'mixed' : 'monthly_contribution');
+
+      // Build a normalized allocations breakdown (used for mixed/split payments).
+      if (!Array.isArray(allocations) || allocations.length === 0) {
+        if (allocationType === 'mixed') {
+          const s = savings_amount != null ? Number(savings_amount) : 0;
+          const l = loan_amount != null ? Number(loan_amount) : 0;
+          allocations = [];
+          if (s > 0) allocations.push({ type: 'savings', amount: s });
+          if (l > 0) allocations.push({ type: 'loan_repayment', amount: l, loan_id: loan_id || null });
+        } else if (allocationType === 'monthly_contribution') {
+          allocations = [{ type: 'savings', amount: Number(amount) }];
+        } else if (allocationType === 'loan_repayment') {
+          allocations = [{ type: 'loan_repayment', amount: Number(amount), loan_id: loan_id || null }];
+        } else {
+          allocations = [{ type: allocationType, amount: Number(amount), fee_id: fee_id || null, loan_id: loan_id || null }];
+        }
+      } else {
+        allocations = allocations.map((a) => ({
+          type: a.type,
+          amount: Number(a.amount) || 0,
+          loan_id: a.loan_id || loan_id || null,
+          fee_id: a.fee_id || fee_id || null,
+        }));
+      }
+
+      const savingsAmt = allocations.reduce((s, a) => s + (a.type === 'savings' ? a.amount : 0), 0);
+      const loanAmt = allocations.reduce((s, a) => s + (a.type === 'loan_repayment' ? a.amount : 0), 0);
+      // Derive the storage allocation_type: single-type, else 'mixed'.
+      let paymentAlloc = allocationType;
+      if (allocations.length > 1) {
+        paymentAlloc = 'mixed';
+      } else if (allocations.length === 1) {
+        const t = allocations[0].type;
+        paymentAlloc = t === 'savings' ? 'monthly_contribution' : t;
+      }
 
       // Create a PENDING transaction (no wallet credit yet)
       const txn = await recordTransaction(req.user.id, {
@@ -239,6 +428,12 @@ router.post(
             amount: Number(amount),
             currency: 'NGN',
             status: 'pending',
+            allocation_type: paymentAlloc,
+            allocations,
+            loan_id: loan_id || null,
+            fee_id: fee_id || null,
+            savings_amount: savingsAmt > 0 ? savingsAmt : null,
+            loan_amount: loanAmt > 0 ? loanAmt : null,
             payment_reference: payment_reference || null,
             payment_date: payment_date || null,
             bank_name: bank_name || null,
@@ -256,6 +451,36 @@ router.post(
         }
       } catch (drErr) {
         logger.warn('deposit_requests table error (non-fatal):', drErr.message);
+      }
+
+      // Mirror the attached proof into payment_proofs so the member can see it
+      // under "My Proofs". Non-fatal: the deposit itself must never be blocked.
+      if (proof_url) {
+        try {
+          const proofPaymentType =
+            paymentAlloc === 'loan_repayment' ? 'loan_repayment'
+            : paymentAlloc === 'registration_fee' ? 'registration_fee'
+            : paymentAlloc === 'monthly_contribution' ? 'monthly_contribution'
+            : 'other';
+          await supabase.from('payment_proofs').insert({
+            profile_id: req.user.id,
+            payment_type: proofPaymentType,
+            amount: Number(amount),
+            currency: 'NGN',
+            payment_date: payment_date || new Date().toISOString(),
+            payment_method: 'bank_transfer',
+            transaction_reference: payment_reference || null,
+            receiving_bank: bank_name || null,
+            bank_account_name: sender_account_name || null,
+            bank_account_number: sender_account_number || null,
+            proof_url,
+            proof_type: 'image',
+            member_note: description || 'Deposit with attached proof',
+            status: 'pending',
+          });
+        } catch (ppErr) {
+          logger.warn('payment_proofs mirror insert failed (non-fatal):', ppErr.message);
+        }
       }
 
       logger.info(`Deposit request submitted for user ${req.user.id}: ₦${amount}`);
@@ -514,6 +739,14 @@ router.get('/payment-settings', authenticate, async (req, res) => {
       .eq('key', 'payment_account')
       .maybeSingle();
 
+    if (error && error.message?.includes('does not exist')) {
+      return res.json({
+        success: true,
+        bank: process.env.DEFAULT_PAYMENT_BANK || 'Opay',
+        account_name: process.env.DEFAULT_PAYMENT_ACCOUNT_NAME || 'Coopvest Africa',
+        account_number: process.env.DEFAULT_PAYMENT_ACCOUNT_NUMBER || '',
+      });
+    }
     if (error) throw error;
 
     if (data?.value) {
@@ -586,3 +819,4 @@ module.exports = router;
 module.exports.ensureWallet = ensureWallet;
 module.exports.adjustBalance = adjustBalance;
 module.exports.recordTransaction = recordTransaction;
+module.exports.computeObligations = computeObligations;

@@ -4,6 +4,7 @@ import '../../../config/theme_config.dart';
 import '../../../config/theme_extension.dart';
 import 'ticket_list_screen.dart';
 import 'ticket_creation_screen.dart';
+import 'live_chat_screen.dart';
 
 /// Support/Complaints Home Screen
 class SupportHomeScreen extends ConsumerWidget {
@@ -73,7 +74,19 @@ class SupportHomeScreen extends ConsumerWidget {
               ),
               
               const SizedBox(height: 12),
-              
+
+              SizedBox(
+                width: double.infinity, height: 56,
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (context) => const LiveChatScreen())),
+                  icon: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+                  label: const Text('Live Chat with Support', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(backgroundColor: CoopvestColors.secondary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
               SizedBox(
                 width: double.infinity, height: 56,
                 child: OutlinedButton.icon(

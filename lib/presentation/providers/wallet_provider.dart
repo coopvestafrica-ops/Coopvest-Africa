@@ -28,6 +28,7 @@ class WalletRepository {
           balance: (response['balance'] as num?)?.toDouble() ?? 0.0,
           totalContributions: (response['total_contributions'] as num?)?.toDouble() ?? 0.0,
           totalSavings: (response['total_savings'] as num?)?.toDouble() ?? 0.0,
+          monthlySavings: (response['monthly_savings'] as num?)?.toDouble() ?? 0.0,
           pendingContributions: (response['pending_contributions'] as num?)?.toDouble() ?? 0.0,
           availableForWithdrawal: (response['available_for_withdrawal'] as num?)?.toDouble() ?? (response['balance'] as num?)?.toDouble() ?? 0.0,
           updatedAt: response['lastUpdated'] != null ? DateTime.parse(response['lastUpdated'] as String) : DateTime.now(),
@@ -47,6 +48,20 @@ class WalletRepository {
         availableForWithdrawal: 0.0,
         updatedAt: DateTime.now(),
       );
+    }
+  }
+
+  /// Get obligations breakdown (savings / loans / fines / fees / total_due)
+  Future<Map<String, dynamic>> getObligations() async {
+    try {
+      final response = await _apiClient.get('/wallet/obligations');
+      if (response is Map<String, dynamic> && response['obligations'] is Map<String, dynamic>) {
+        return response['obligations'] as Map<String, dynamic>;
+      }
+      return {};
+    } catch (e) {
+      logger.e('Get obligations error: $e');
+      return {};
     }
   }
 
@@ -108,14 +123,25 @@ class WalletRepository {
   }
 
   /// Make contribution - returns Map with transaction and message
-  Future<Map<String, dynamic>> makeContribution(double amount, {String? description, String? proofUrl, String? paymentType}) async {
+  Future<Map<String, dynamic>> makeContribution(
+    double amount, {
+    String? description,
+    String? proofUrl,
+    String allocationType = 'monthly_contribution',
+    String? loanId,
+    String? feeId,
+    List<Map<String, dynamic>>? allocations,
+  }) async {
     try {
       final Map<String, dynamic> requestData = {
         'amount': amount,
+        'allocation_type': allocationType,
       };
       if (description != null) requestData['description'] = description;
       if (proofUrl != null) requestData['proof_url'] = proofUrl;
-      if (paymentType != null) requestData['payment_type'] = paymentType;
+      if (loanId != null) requestData['loan_id'] = loanId;
+      if (feeId != null) requestData['fee_id'] = feeId;
+      if (allocations != null) requestData['allocations'] = allocations;
       
       final response = await _apiClient.post(
         '/wallet/contribute',
@@ -318,11 +344,22 @@ class WalletNotifier extends StateNotifier<WalletState> {
     required double amount,
     String? description,
     String? proofUrl,
-    String? paymentType,
+    String allocationType = 'monthly_contribution',
+    String? loanId,
+    String? feeId,
+    List<Map<String, dynamic>>? allocations,
   }) async {
     state = state.copyWith(status: WalletStatus.loading);
     try {
-      final result = await _walletRepository.makeContribution(amount, description: description, proofUrl: proofUrl, paymentType: paymentType);
+      final result = await _walletRepository.makeContribution(
+        amount,
+        description: description,
+        proofUrl: proofUrl,
+        allocationType: allocationType,
+        loanId: loanId,
+        feeId: feeId,
+        allocations: allocations,
+      );
 
       // Note: We don't reload wallet immediately since deposit is pending verification
       // The wallet will be updated after admin verification
@@ -436,4 +473,10 @@ final transactionsProvider = Provider<List<Transaction>>((ref) {
 final walletErrorProvider = Provider<String?>((ref) {
   final walletState = ref.watch(walletProvider);
   return walletState.error;
+});
+
+/// Obligations breakdown provider (savings / loans / fines / fees / total_due)
+final obligationsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  final repo = ref.watch(walletRepositoryProvider);
+  return repo.getObligations();
 });

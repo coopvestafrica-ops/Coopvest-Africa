@@ -20,12 +20,18 @@ Loan _convertLoanDataToLoan(LoanData data) {
         : data.monthlyRepayment * data.tenure,
     status: data.status,
     purpose: data.purpose,
-    guarantorsAccepted: 0,
-    guarantorsRequired: 3,
+    qrId: data.qrId,
+    qrCode: data.qrCode,
+    qrData: data.qrData,
+    qrExpiresAt: data.qrExpiresAt,
+    qrStatus: data.qrStatus,
+    guarantorsAccepted: data.guarantorsAccepted,
+    guarantorsRequired: data.guarantorsRequired,
     createdAt: data.createdAt,
     updatedAt: data.createdAt,
     approvedAt: null,
     disbursedAt: null,
+    remainingBalance: data.remainingBalance,
   );
 }
 
@@ -261,10 +267,12 @@ class LoanNotifier extends StateNotifier<LoansState> {
     state = state.copyWith(error: null);
   }
 
-  /// Calculate maximum loan amount based on savings
-  /// Formula: totalSavings * 3 (loan multiplier)
-  double calculateMaxLoanAmount(double totalSavings) {
-    return totalSavings * AppConfig.loanMultiplier;
+  /// Calculate maximum loan amount based on savings.
+  /// Uses the default 3x multiplier for generic estimates; product-specific
+  /// limits (Premium 4x, Maxi 5x) are enforced by the backend at apply time.
+  double calculateMaxLoanAmount(double totalSavings, {String? loanType}) {
+    final multiplier = AppConfig.loanMultipliers[loanType] ?? AppConfig.loanMultiplier;
+    return totalSavings * multiplier;
   }
 
   /// Check if member is eligible for loan based on membership duration

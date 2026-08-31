@@ -189,6 +189,13 @@ router.post(
 
       if (error) throw error;
 
+      // Reflect the pending termination on the member's profile so both the
+      // mobile app and the admin portal can see it.
+      await supabase
+        .from('profiles')
+        .update({ membership_status: 'pending_termination' })
+        .eq('id', profileId);
+
       res.status(201).json({
         success: true,
         message: 'Termination request submitted successfully. You will be contacted within 5-10 business days.',
@@ -227,6 +234,11 @@ router.post('/:id/cancel', [param('id').notEmpty()], validate, async (req, res) 
       .eq('id', data.id);
     if (error) throw error;
 
+    await supabase
+      .from('profiles')
+      .update({ membership_status: 'active' })
+      .eq('id', data.profile_id);
+
     res.json({ success: true, message: 'Termination request cancelled.' });
   } catch (err) {
     logger.error('termination cancel error:', err);
@@ -264,6 +276,11 @@ router.post('/:id/confirm', [param('id').notEmpty()], validate, async (req, res)
       .update({ status: 'confirmed', confirmed_at: now, updated_at: now })
       .eq('id', data.id);
     if (error) throw error;
+
+    await supabase
+      .from('profiles')
+      .update({ membership_status: 'terminated' })
+      .eq('id', data.profile_id);
 
     res.json({
       success: true,

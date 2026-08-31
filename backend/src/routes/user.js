@@ -7,9 +7,16 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
+const multer = require('multer');
 const supabase = require('../config/supabase');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
+
+const AVATAR_BUCKET = process.env.AVATAR_BUCKET || 'kyc-documents';
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -54,6 +61,9 @@ router.get('/profile', authenticate, async (req, res) => {
         email: profile.email,
         name: profile.name,
         phone: profile.phone,
+        address: profile.address || null,
+        profilePicture: profile.profile_picture || null,
+        membershipStatus: profile.membership_status || 'active',
         referralCode: referralRes.data?.my_referral_code || null,
         referralCount: referralRes.data?.referral_count || 0,
         kycVerified: kycRes.data?.verified || false,
@@ -84,15 +94,17 @@ router.get('/profile', authenticate, async (req, res) => {
  */
 router.put('/profile', authenticate, [
   body('name').optional().isLength({ min: 2, max: 100 }),
-  body('phone').optional().isMobilePhone()
+  body('phone').optional().isMobilePhone(),
+  body('address').optional().isString().isLength({ max: 500 })
 ], validate, async (req, res) => {
   try {
-    const { name, phone } = req.body;
+    const { name, phone, address } = req.body;
     const { userId } = req.user;
 
     const updateData = {};
     if (name) updateData.name = name;
     if (phone) updateData.phone = phone;
+    if (address !== undefined) updateData.address = address;
 
     const { data, error } = await supabase
       .from('profiles')
@@ -114,7 +126,9 @@ router.put('/profile', authenticate, [
         userId: data.user_id,
         email: data.email,
         name: data.name,
-        phone: data.phone
+        phone: data.phone,
+        address: data.address || null,
+        profilePicture: data.profile_picture || null
       },
       message: 'Profile updated successfully'
     });
@@ -124,6 +138,48 @@ router.put('/profile', authenticate, [
       success: false,
       error: error.message
     });
+  }
+});
+
+/**
+ * POST /api/v1/user/profile-picture
+ * Upload the member's profile picture. Stored in the private Supabase Storage
+ * bucket under avatars/{authUserId}/ and referenced from profiles.profile_picture
+ * via a long-lived signed URL (the service role bypasses bucket RLS).
+ */
+router.post('/profile-picture', authenticate, avatarUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'An image file is required' });
+    }
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowed.includes(req.file.mimetype)) {
+      return res.status(400).json({ success: false, error: 'Only JPG, PNG or WEBP images are allowed' });
+    }
+
+    const ext = req.file.mimetype.split('/')[1].replace('jpeg', 'jpg');
+    const storagePath = `avatars/${req.user.id}/avatar-${Date.now()}.${ext}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(AVATAR_BUCKET)
+      .upload(storagePath, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
+    if (uploadError) throw uploadError;
+
+    const { data: signed, error: signedErr } = await supabase.storage
+      .from(AVATAR_BUCKET)
+      .createSignedUrl(storagePath, 60 * 60 * 24 * 365 * 10);
+    if (signedErr) throw signedErr;
+
+    const { error: updateErr } = await supabase
+      .from('profiles')
+      .update({ profile_picture: signed.signedUrl })
+      .eq('user_id', req.user.userId);
+    if (updateErr) throw updateErr;
+
+    res.json({ success: true, profilePicture: signed.signedUrl, message: 'Profile picture updated' });
+  } catch (error) {
+    logger.error('Profile picture upload error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

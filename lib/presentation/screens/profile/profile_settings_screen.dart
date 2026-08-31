@@ -200,21 +200,31 @@ class _ProfileSettingsScreenState extends ConsumerState<ProfileSettingsScreen> {
       );
 
       if (pickedFile != null) {
+        // Optimistically show the local preview, then persist to the backend
+        // so the same photo appears on every device and after reinstalls.
         setState(() {
           _profileImage = File(pickedFile.path);
         });
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Profile picture updated successfully'),
-            backgroundColor: CoopvestColors.success,
-          ),
-        );
+
+        await ref.read(authProvider.notifier).updateProfilePicture(pickedFile.path);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Profile picture updated successfully'),
+              backgroundColor: CoopvestColors.success,
+            ),
+          );
+        }
       }
     } catch (e) {
+      // Roll back the optimistic preview if the upload failed.
+      setState(() {
+        _profileImage = null;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error picking image: $e'),
+          content: Text('Error updating profile picture: $e'),
           backgroundColor: CoopvestColors.error,
         ),
       );
@@ -379,8 +389,12 @@ class _ProfileSettingsScreenState extends ConsumerState<ProfileSettingsScreen> {
                 child: CircleAvatar(
                   radius: 60,
                   backgroundColor: context.secondaryCardBackground,
-                  backgroundImage: _profileImage != null ? FileImage(_profileImage!) : null,
-                  child: _profileImage == null
+                  backgroundImage: _profileImage != null
+                      ? FileImage(_profileImage!)
+                      : (user?.profilePicture != null && user!.profilePicture!.isNotEmpty
+                          ? NetworkImage(user.profilePicture!)
+                          : null) as ImageProvider?,
+                  child: _profileImage == null && (user?.profilePicture == null || user!.profilePicture!.isEmpty)
                       ? Icon(Icons.person, size: 60, color: context.textSecondary)
                       : null,
                 ),

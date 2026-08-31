@@ -28,7 +28,11 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
   final _amountController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   String _selectedPaymentMethod = 'bank_transfer';
-  String _selectedDepositType = 'monthly_contribution';
+  String _allocationType = 'monthly_contribution';
+  final _splitSavingsController = TextEditingController();
+  final _splitLoanController = TextEditingController();
+  final _splitFineController = TextEditingController();
+  final _splitFeeController = TextEditingController();
   bool _isProcessing = false;
   File? _proofFile;
   bool _isUploadingProof = false;
@@ -231,12 +235,14 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
     );
   }
 
-  String get _selectedDepositTypeLabel {
-    final match = _depositTypes.firstWhere(
-      (t) => t['value'] == _selectedDepositType,
-      orElse: () => _depositTypes.first,
+  Widget _splitField(String label, TextEditingController controller) {
+    return AppTextField(
+      label: label,
+      controller: controller,
+      keyboardType: TextInputType.number,
+      prefixText: '₦ ',
+      hint: '0',
     );
-    return match['label'] as String;
   }
 
   Future<void> _processDeposit() async {
@@ -245,10 +251,43 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
     try {
       final amount = double.parse(_amountController.text.replaceAll(',', ''));
 
+      List<Map<String, dynamic>>? allocations;
+      if (_allocationType == 'mixed') {
+        double parseSplit(TextEditingController c) =>
+            double.tryParse(c.text.replaceAll(',', '')) ?? 0;
+        allocations = [
+          {'type': 'savings', 'amount': parseSplit(_splitSavingsController)},
+          {'type': 'loan_repayment', 'amount': parseSplit(_splitLoanController)},
+          {'type': 'fine', 'amount': parseSplit(_splitFineController)},
+          {'type': 'fee', 'amount': parseSplit(_splitFeeController)},
+        ].where((a) => (a['amount'] as double) > 0).toList();
+
+        final total = allocations.fold<double>(0, (s, a) => s + (a['amount'] as double));
+        if ((total - amount).abs() > 0.01) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Split amounts (₦${total.toStringAsFixed(0)}) must equal the total (₦${amount.toStringAsFixed(0)})'),
+              backgroundColor: CoopvestColors.error,
+            ),
+          );
+          setState(() => _isProcessing = false);
+          return;
+        }
+      }
+
+      final isLoanRepay = _allocationType == 'loan_repayment';
+      final isSavings = _allocationType == 'monthly_contribution';
+      String description;
+      if (_allocationType == 'mixed') description = 'Split payment';
+      else if (isLoanRepay) description = 'Loan repayment';
+      else if (isSavings) description = 'Savings contribution';
+      else description = 'Payment (${_allocationType.replaceAll('_', ' ')})';
+
       // Upload proof image if user attached one
       String? proofUrl = _proofUrl;
       if (_proofFile != null && proofUrl == null) {
         setState(() { _isUploadingProof = true; });
+        bool uploadFailed = false;
         try {
           final apiClient = ref.read(apiClientProvider);
           final formData = FormData.fromMap({
@@ -257,19 +296,31 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
           final uploadResp = await apiClient.dio.post('/wallet/upload-proof', data: formData);
           if (uploadResp.data['success'] == true) {
             proofUrl = uploadResp.data['url'] as String?;
+          } else {
+            uploadFailed = true;
           }
         } catch (uploadErr) {
-          // Non-fatal: continue deposit without proof
+          uploadFailed = true;
         } finally {
           setState(() { _isUploadingProof = false; });
+        }
+        if (uploadFailed && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Proof image could not be uploaded — your deposit was submitted without it. You can submit the proof again anytime from "My Proofs".'),
+              backgroundColor: CoopvestColors.warning,
+              duration: Duration(seconds: 5),
+            ),
+          );
         }
       }
 
       final result = await ref.read(walletProvider.notifier).makeContribution(
         amount: amount,
-        description: '$_selectedDepositTypeLabel via ${_selectedPaymentMethod.replaceAll('_', ' ')}',
+        description: '$description via ${_selectedPaymentMethod.replaceAll('_', ' ')}',
         proofUrl: proofUrl,
-        paymentType: _selectedDepositType,
+        allocationType: _allocationType,
+        allocations: allocations,
       );
       
       // Safely extract the message from the result
@@ -525,64 +576,46 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Deposit Type', style: TextStyle(fontWeight: FontWeight.bold, color: context.textPrimary)),
-                const SizedBox(height: 4),
-                Text(
-                  'What is this deposit for?',
-                  style: TextStyle(fontSize: 12, color: context.textSecondary),
-                ),
+                Text('Payment Allocation', style: TextStyle(fontWeight: FontWeight.bold, color: context.textPrimary)),
                 const SizedBox(height: 12),
-                Column(
-                  children: _depositTypes.map((type) {
-                    final isSelected = _selectedDepositType == type['value'];
-                    return GestureDetector(
-                      onTap: () => setState(() => _selectedDepositType = type['value'] as String),
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: isSelected ? CoopvestColors.primary.withOpacity(0.1) : context.cardBackground,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: isSelected ? CoopvestColors.primary : context.dividerColor,
-                            width: isSelected ? 2 : 1,
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              (type['icon'] as IconData?) ?? Icons.payments,
-                              color: isSelected ? CoopvestColors.primary : context.textSecondary,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    type['label'] as String,
-                                    style: TextStyle(
-                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                      color: context.textPrimary,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    type['description'] as String,
-                                    style: TextStyle(fontSize: 11, color: context.textSecondary),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            if (isSelected)
-                              const Icon(Icons.check_circle, color: CoopvestColors.primary),
-                          ],
-                        ),
-                      ),
-                    );
-                  }).toList(),
+                DropdownButtonFormField<String>(
+                  value: _allocationType,
+                  decoration: InputDecoration(
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'monthly_contribution',
+                      child: Text('Monthly Savings'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'loan_repayment',
+                      child: Text('Loan Repayment'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'fine',
+                      child: Text('Fine / Penalty'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'registration_fee',
+                      child: Text('Registration Fee'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'fee',
+                      child: Text('Other Fee'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'mixed',
+                      child: Text('Split between obligations'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setState(() => _allocationType = value);
+                  },
                 ),
-
                 const SizedBox(height: 24),
 
                 AppTextField(
@@ -594,6 +627,22 @@ class _DepositScreenState extends ConsumerState<DepositScreen> {
                   prefixText: '₦ ',
                   onChanged: (value) => setState(() {}),
                 ),
+
+                if (_allocationType == 'mixed') ...[
+                  const SizedBox(height: 24),
+                  Text(
+                    'Split the payment across your obligations (must sum to the total)',
+                    style: TextStyle(fontSize: 12, color: context.textSecondary),
+                  ),
+                  const SizedBox(height: 12),
+                  _splitField('To Savings', _splitSavingsController),
+                  const SizedBox(height: 12),
+                  _splitField('To Loan', _splitLoanController),
+                  const SizedBox(height: 12),
+                  _splitField('To Fine/Penalty', _splitFineController),
+                  const SizedBox(height: 12),
+                  _splitField('To Fee', _splitFeeController),
+                ],
 
                 const SizedBox(height: 24),
 

@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -213,22 +214,44 @@ class AuthRepository {
   }
 
   /// Update user profile on the backend
-  Future<User> updateProfile({String? name, String? phone}) async {
+  Future<User> updateProfile({String? name, String? phone, String? address}) async {
     try {
       final data = <String, dynamic>{};
       if (name != null) data['name'] = name;
       if (phone != null) data['phone'] = phone;
+      if (address != null) data['address'] = address;
 
       final response = await _apiClient.put('/user/profile', data: data);
       final userData = response['user'] as Map<String, dynamic>;
       final user = _cachedUser?.copyWith(
         name: userData['name'] as String? ?? _cachedUser?.name,
         phone: userData['phone'] as String? ?? _cachedUser?.phone,
+        address: userData['address'] as String? ?? _cachedUser?.address,
       ) ?? User.fromJson(userData);
       _cachedUser = user;
       return user;
     } catch (e) {
       logger.e('Update profile error: $e');
+      rethrow;
+    }
+  }
+
+  /// Upload a new profile picture and return the updated user.
+  Future<User> uploadProfilePicture(String filePath) async {
+    try {
+      final formData = FormData.fromMap({
+        'file': await MultipartFile.fromFile(filePath),
+      });
+      final response = await _apiClient.post('/user/profile-picture', data: formData);
+      final url = response['profilePicture'] as String?;
+      final user = _cachedUser?.copyWith(profilePicture: url) ?? _cachedUser;
+      if (user != null) {
+        _cachedUser = user;
+        return user;
+      }
+      throw Exception('No signed-in user to update');
+    } catch (e) {
+      logger.e('Profile picture upload error: $e');
       rethrow;
     }
   }
